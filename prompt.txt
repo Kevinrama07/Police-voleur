@@ -1,0 +1,994 @@
+# PROMPT MASTER — CONCEPTION ET DÉVELOPPEMENT DU JEU POLICE – VOLEUR
+
+## 1. TON RÔLE ET TA MISSION
+
+Tu es une équipe senior composée de :
+
+- Un ingénieur logiciel Python spécialisé dans les architectures de jeux.
+- Un expert en intelligence artificielle et en théorie des graphes.
+- Un spécialiste des algorithmes Minimax et Alpha-Beta.
+- Un développeur expérimenté en Pygame.
+- Un ingénieur réseau spécialisé en Socket TCP et applications multijoueurs.
+- Un UI/UX Designer spécialisé dans les interfaces de jeux vidéo.
+- Un ingénieur QA spécialisé dans les tests automatisés et la validation des jeux.
+
+Ta mission est de concevoir, développer, tester et livrer une application desktop complète appelée **POLICE – VOLEUR**.
+
+Il ne s'agit pas de produire un prototype simplifié ou une simple démonstration graphique.
+
+Je veux une véritable application fonctionnelle, stable, modulaire, optimisée et visuellement professionnelle.
+
+Tu dois travailler comme un ingénieur logiciel senior : analyser avant de coder, concevoir une architecture cohérente, implémenter progressivement, tester chaque fonctionnalité et corriger les problèmes rencontrés.
+
+**Ne te contente jamais de me fournir des exemples de code ou des recommandations. Tu dois réaliser concrètement le projet dans le répertoire de travail.**
+
+---
+
+# 2. CONTEXTE ET OBJECTIF DU JEU
+
+Le jeu oppose deux équipes :
+
+- POLICE : trois policiers qui collaborent pour capturer le voleur.
+- VOLEUR : un personnage qui cherche à retourner au centre du plateau.
+
+Le plateau est circulaire et comporte des lignes horizontales, verticales, des arcs intérieurs et un cercle central.
+
+Le déplacement des personnages doit impérativement suivre les lignes et les connexions du plateau.
+
+Aucun personnage ne peut sauter, traverser un autre personnage ou se déplacer en dehors des connexions autorisées.
+
+L'objectif pédagogique principal est de démontrer l'utilisation de :
+
+1. La théorie des graphes.
+2. La recherche de chemins.
+3. L'algorithme Minimax.
+4. L'élagage Alpha-Beta.
+5. La programmation réseau avec Socket TCP.
+
+---
+
+# 3. ANALYSE OBLIGATOIRE DE L'IMAGE DU PLATEAU
+
+Une image originale du plateau de jeu est fournie dans le contexte du projet.
+
+Tu dois impérativement l'analyser avant de commencer le développement.
+
+Cette image constitue la référence géométrique officielle du jeu.
+
+## Travail demandé
+
+1. Examiner les lignes, les arcs, les intersections et les points de jonction.
+2. Identifier toutes les positions réellement accessibles.
+3. Identifier toutes les connexions possibles entre ces positions.
+4. Attribuer un identifiant unique à chaque sommet.
+5. Construire une liste complète des arêtes.
+6. Identifier précisément le sommet central.
+7. Vérifier la continuité des déplacements sur les arcs et les lignes.
+8. Vérifier que le graphe représente fidèlement le dessin original.
+
+Ne crée pas arbitrairement des positions ou des connexions.
+
+Ne considère pas chaque pixel ou chaque coordonnée graphique comme une position jouable.
+
+Les déplacements doivent correspondre aux sommets et arêtes explicitement définis.
+
+## Livrables de cette analyse
+
+Créer :
+
+- `docs/BOARD_ANALYSIS.md` : analyse géométrique du plateau.
+- `docs/GRAPH_MODEL.md` : liste des sommets, arêtes et règles de connexion.
+- Une représentation graphique du graphe avec les identifiants des sommets.
+- Un système de validation permettant de vérifier la cohérence entre le dessin et le graphe.
+
+Prévoir une visualisation de débogage permettant d'afficher les sommets et les connexions directement sur le plateau.
+
+**IMPORTANT :** si certaines connexions sont ambiguës sur l'image, documente les ambiguïtés et demande une clarification plutôt que d'inventer la topologie.
+
+---
+
+# 4. MODÉLISATION MATHÉMATIQUE
+
+Le plateau doit être représenté par un graphe non orienté :
+
+G = (V, E)
+
+Avec :
+
+- V : ensemble des sommets.
+- E : ensemble des arêtes.
+
+Le graphe doit être représenté en Python avec une structure de type liste d'adjacence.
+
+Chaque sommet doit posséder :
+
+- Un identifiant unique.
+- Ses coordonnées graphiques.
+- Ses sommets voisins.
+
+Chaque arête représente une liaison autorisée.
+
+Le graphe constitue la source unique de vérité pour les déplacements.
+
+Ne mélange jamais la logique du graphe avec les coordonnées de rendu Pygame.
+
+## État du jeu
+
+Représenter chaque état avec :
+
+S = (V, P1, P2, P3, T)
+
+Où :
+
+- V : position du voleur.
+- P1 : position du policier 1.
+- P2 : position du policier 2.
+- P3 : position du policier 3.
+- T : équipe devant jouer.
+
+Prévoir également un historique des mouvements pour la gestion des répétitions et des statistiques.
+
+---
+
+# 5. RÈGLES OFFICIELLES DU JEU
+
+Ces règles sont obligatoires et ne doivent pas être modifiées arbitrairement.
+
+## 5.1. Initialisation
+
+Au début d'une nouvelle partie :
+
+- Le voleur commence obligatoirement au centre.
+- Les trois policiers commencent sur des sommets aléatoires.
+- Aucun policier ne commence au centre.
+- Les policiers doivent avoir des positions différentes.
+- Aucun personnage ne peut partager un sommet avec un autre.
+
+Les positions doivent être générées uniquement parmi les positions valides.
+
+Le système doit permettre de reproduire une configuration à partir d'une graine aléatoire pour faciliter les tests.
+
+## 5.2. Déplacement
+
+Un personnage peut uniquement se déplacer vers un sommet directement connecté à sa position actuelle.
+
+Interdictions :
+
+- Sauter un sommet.
+- Traverser un personnage.
+- Occuper un sommet déjà occupé.
+- Se déplacer en dehors des arêtes du graphe.
+- Déplacer plusieurs policiers pendant le même tour.
+
+Le centre est réservé au voleur pendant la partie.
+
+## 5.3. Alternance des tours
+
+Le fonctionnement est strictement le suivant :
+
+TOUR 1 : VOLEUR  
+TOUR 2 : UN SEUL POLICIER  
+TOUR 3 : VOLEUR  
+TOUR 4 : UN SEUL POLICIER  
+TOUR 5 : VOLEUR  
+Et ainsi de suite.
+
+Les trois policiers constituent une seule équipe stratégique.
+
+Lors du tour des policiers, le joueur ou l'IA choisit librement lequel des trois policiers va se déplacer.
+
+Il est interdit de déplacer deux policiers simultanément.
+
+## 5.4. Conditions de victoire
+
+### Victoire des policiers
+
+Les policiers gagnent lorsque le voleur n'a plus aucun déplacement légal.
+
+Formellement :
+
+LegalMoves(Voleur) = ∅
+
+### Victoire du voleur
+
+Le voleur gagne lorsqu'il retourne au centre après avoir quitté sa position initiale.
+
+La victoire est immédiatement déclenchée après son déplacement de retour.
+
+Il n'a pas besoin d'attendre le tour des policiers.
+
+### Gestion des parties infinies
+
+Prévoir la détection des états répétitifs.
+
+Un éventuel match nul par répétition ou limite de tours doit être configurable et clairement documenté. Ne transforme jamais arbitrairement une partie non terminée en victoire d'un camp.
+
+---
+
+# 6. INTELLIGENCE ARTIFICIELLE — MINIMAX
+
+C'est le cœur pédagogique et technique du projet.
+
+Tu dois développer une véritable implémentation de Minimax.
+
+Ne remplace pas Minimax par une simple sélection aléatoire, une recherche gloutonne ou une stratégie prédéfinie.
+
+## 6.1. Fonctionnement
+
+Les deux équipes ont des objectifs opposés.
+
+POLICE :
+- Chercher à bloquer le voleur.
+- Réduire ses possibilités de déplacement.
+- Contrôler les chemins permettant de retourner au centre.
+
+VOLEUR :
+- Chercher le chemin de retour au centre.
+- Éviter les policiers.
+- Préserver ses possibilités de déplacement.
+- Éviter les situations sans issue.
+
+L'équipe des policiers est le MAXIMIZER.
+
+Le voleur est le MINIMIZER.
+
+## 6.2. Arbre de décision
+
+Développer un arbre de décision qui explore les états futurs possibles.
+
+À chaque niveau :
+
+- Si c'est le tour du voleur, générer tous ses déplacements légaux.
+- Si c'est le tour des policiers, générer tous les déplacements légaux de chacun des trois policiers, un seul à la fois.
+
+Les états doivent respecter toutes les règles du jeu.
+
+## 6.3. Fonction d'évaluation
+
+Développer une fonction heuristique basée notamment sur :
+
+- La distance minimale du voleur au centre.
+- Le nombre de déplacements légaux du voleur.
+- La proximité des policiers avec les chemins de retour.
+- Le nombre de chemins accessibles au voleur.
+- Le degré de blocage des déplacements possibles.
+
+Utiliser BFS pour calculer les distances minimales sur le graphe.
+
+Prévoir des scores terminaux :
+
+- Victoire des policiers : +10000.
+- Victoire du voleur : -10000.
+
+Les scores terminaux doivent être prioritaires sur les évaluations heuristiques.
+
+La fonction d'évaluation doit être testée sur plusieurs configurations.
+
+## 6.4. Alpha-Beta
+
+Implémenter l'élagage Alpha-Beta.
+
+Prévoir :
+
+- Alpha.
+- Beta.
+- L'ordre des déplacements pour améliorer l'élagage.
+- Une profondeur de recherche configurable.
+- Une table de transposition si elle apporte un gain mesurable.
+- Une limitation du temps de calcul.
+- Une recherche itérative si nécessaire.
+
+Ne sacrifie jamais la validité des décisions pour améliorer artificiellement les performances.
+
+## 6.5. Optimisation
+
+L'IA doit être suffisamment rapide pour ne pas bloquer l'interface.
+
+Utiliser :
+
+- La génération efficace des états.
+- La réduction des copies inutiles.
+- La mémorisation des évaluations lorsque cela est pertinent.
+- L'élagage Alpha-Beta.
+- Un ordre intelligent des déplacements.
+
+Les recherches IA doivent s'exécuter sans bloquer la boucle graphique Pygame.
+
+---
+
+# 7. LES TROIS MODES DE JEU
+
+Les trois modes doivent utiliser exactement le même moteur de jeu et les mêmes règles.
+
+## MODE 1 : DÉMONSTRATION
+
+Ce mode doit faire jouer deux intelligences artificielles.
+
+IA POLICE :
+- Contrôle les trois policiers.
+- Utilise Minimax avec Alpha-Beta.
+- Cherche à bloquer le voleur.
+
+IA VOLEUR :
+- Contrôle le voleur.
+- Utilise Minimax avec Alpha-Beta.
+- Cherche à revenir au centre.
+
+### Fonctionnalités spécifiques
+
+Créer un véritable panneau de visualisation de l'intelligence artificielle.
+
+Afficher :
+
+- Le tour actuel.
+- L'équipe qui réfléchit.
+- Les déplacements possibles.
+- Les scores des possibilités.
+- Le meilleur déplacement sélectionné.
+- La profondeur de recherche.
+- Le nombre de nœuds explorés.
+- Le nombre de branches élaguées.
+- Le temps de calcul.
+- Le score de l'état actuel.
+
+Prévoir :
+
+- Lecture automatique.
+- Pause.
+- Reprise.
+- Réinitialisation.
+- Vitesse de simulation réglable.
+- Possibilité de visualiser les décisions avant leur exécution.
+
+Créer une visualisation pédagogique de l'arbre Minimax.
+
+L'arbre doit correspondre aux véritables états explorés par l'algorithme, et non à une animation décorative inventée.
+
+## MODE 2 : SINGLE PLAYER
+
+Un seul joueur humain affronte l'intelligence artificielle.
+
+### Choix A : VOLEUR
+
+Le joueur contrôle le voleur.
+
+L'IA contrôle les trois policiers.
+
+Le joueur doit essayer de retourner au centre.
+
+### Choix B : POLICE
+
+Le joueur contrôle les trois policiers.
+
+Il peut choisir lequel déplacer à chaque tour.
+
+L'IA contrôle le voleur.
+
+### Fonctionnalités
+
+- Sélection du camp.
+- Affichage du tour actuel.
+- Indication des déplacements autorisés.
+- Sélection intuitive des personnages.
+- Animation des déplacements.
+- Affichage du gagnant.
+- Recommencer une partie.
+- Retour au menu.
+
+L'IA doit toujours respecter les mêmes règles que celles du mode Démo.
+
+## MODE 3 : MULTIPLAYER
+
+Développer un véritable mode multijoueur en réseau local.
+
+Deux ordinateurs doivent pouvoir jouer ensemble lorsqu'ils sont connectés au même réseau Wi-Fi.
+
+### Architecture
+
+Utiliser une architecture Client-Serveur avec Socket TCP.
+
+Un ordinateur héberge le serveur.
+
+Le second ordinateur se connecte à ce serveur via son adresse IP locale.
+
+### Attribution des rôles
+
+Joueur 1 : POLICE.
+
+Joueur 2 : VOLEUR.
+
+Les deux joueurs peuvent choisir leur rôle.
+
+Si les deux choisissent le même camp, le serveur refuse la configuration et affiche une erreur explicite.
+
+### Fonctionnement réseau
+
+Le serveur doit :
+
+1. Gérer la création des parties.
+2. Accepter deux connexions.
+3. Gérer les rôles.
+4. Vérifier que les deux camps sont différents.
+5. Initialiser le plateau.
+6. Distribuer l'état initial.
+7. Vérifier les déplacements.
+8. Vérifier l'alternance des tours.
+9. Détecter les conditions de victoire.
+10. Diffuser chaque nouvel état aux clients.
+
+### Communication
+
+Utiliser des messages JSON transmis via TCP.
+
+Prévoir des types de messages clairement définis :
+
+- CREATE_GAME
+- JOIN_GAME
+- SELECT_ROLE
+- ROLE_CONFIRMED
+- GAME_START
+- MOVE
+- MOVE_ACCEPTED
+- MOVE_REJECTED
+- GAME_STATE
+- GAME_OVER
+- PLAYER_DISCONNECTED
+- ERROR
+
+Le serveur doit être autoritaire.
+
+Aucun client ne doit pouvoir imposer directement un nouvel état du jeu.
+
+Les clients envoient des intentions de déplacement. Le serveur vérifie et applique les mouvements avant de diffuser le nouvel état.
+
+Prévoir :
+
+- Gestion des erreurs de connexion.
+- Gestion des déconnexions.
+- Détection des messages incomplets.
+- Délais d'attente.
+- Gestion des messages malformés.
+- Synchronisation fiable.
+- Identifiants de partie et de joueur.
+- Reconnexion ou interruption propre de la partie.
+
+Ne jamais exposer une connexion réseau non sécurisée inutilement sur Internet : le périmètre du projet est le réseau local.
+
+---
+
+# 8. INTERFACE GRAPHIQUE ET DESIGN
+
+Utiliser Pygame pour construire une application desktop moderne.
+
+Je ne veux pas d'une interface scolaire basique avec uniquement des rectangles, du texte et des cercles mal stylisés.
+
+Je veux une interface professionnelle, élégante, minimaliste et cohérente.
+
+## Direction artistique
+
+Créer une identité visuelle inspirée des jeux de stratégie modernes.
+
+Caractéristiques :
+
+- Design minimaliste.
+- Interface soignée.
+- Typographie moderne.
+- Hiérarchie visuelle claire.
+- Couleurs équilibrées.
+- Animations fluides.
+- Transitions élégantes.
+- Icônes cohérentes.
+- Espacements réguliers.
+- Excellent contraste.
+
+Palette recommandée :
+
+- Bleu nuit : arrière-plan principal.
+- Bleu électrique : policiers et actions principales.
+- Rouge : voleur et alertes.
+- Blanc cassé : textes et éléments secondaires.
+- Gris : informations complémentaires.
+
+Éviter les effets visuels excessifs, les dégradés inutiles et les animations qui nuisent à la lisibilité.
+
+## Menu principal
+
+Créer un écran d'accueil avec :
+
+- Nom du jeu POLICE – VOLEUR.
+- Bouton Démonstration.
+- Bouton Single Player.
+- Bouton Multiplayer.
+- Bouton Paramètres.
+- Bouton À propos.
+- Bouton Quitter.
+
+## Plateau de jeu
+
+Le plateau doit rester fidèle à l'image originale.
+
+Ne modifie pas sa topologie pour obtenir un meilleur rendu graphique.
+
+Ajouter :
+
+- Les trois policiers bleus.
+- Le voleur rouge.
+- Les indications de sélection.
+- Les déplacements possibles.
+- Les animations.
+- Les informations de partie.
+- Un panneau latéral pour les statistiques.
+
+## Animations
+
+Prévoir :
+
+- Animation de déplacement.
+- Animation de sélection.
+- Indication du personnage actif.
+- Animation de victoire.
+- Transition entre les écrans.
+- Indication visuelle du déplacement choisi par l'IA.
+
+Les animations ne doivent jamais modifier les règles ou les coordonnées logiques du graphe.
+
+---
+
+# 9. SKILLS À UTILISER OBLIGATOIREMENT SELON LEUR PERTINENCE
+
+Avant toute implémentation, examine les Skills disponibles.
+
+Répertoire global connu :
+
+C:\Users\Kevin\.claude\skills\
+
+OpenCode doit également rechercher les Skills disponibles dans les répertoires locaux du projet :
+
+- `.opencode/skills/`
+- `.claude/skills/`
+- `.agents/skills/`
+
+## Procédure obligatoire
+
+1. Énumérer les Skills réellement disponibles.
+2. Lire intégralement le fichier SKILL.md des Skills pertinents avant leur utilisation.
+3. Identifier les compétences applicables au projet Python/Pygame.
+4. Ne pas inventer de Skills.
+5. Ne pas utiliser un Skill uniquement pour prétendre respecter cette consigne.
+6. Si aucun Skill spécialisé dans Python/Pygame n'est installé, travailler avec les bonnes pratiques d'ingénierie sans prétendre qu'un Skill a été utilisé.
+7. Documenter les Skills retenus et leur utilisation.
+
+## Skills connus à examiner
+
+### A. frontend-design
+
+À examiner pour :
+- La conception de l'interface.
+- La hiérarchie visuelle.
+- La cohérence graphique.
+- L'ergonomie.
+- La qualité esthétique.
+
+Ne l'utiliser que si ses instructions sont transférables à une interface desktop Pygame.
+
+### B. modern-web-design
+
+À examiner pour :
+- Les principes de design moderne.
+- La composition.
+- La typographie.
+- Les couleurs.
+- La cohérence visuelle.
+
+Ne pas introduire de technologies Web dans le projet simplement parce que ce Skill les recommande.
+
+### C. pixijs-2d
+
+À examiner uniquement pour identifier d'éventuels principes utiles de rendu 2D et d'animation.
+
+Ne pas utiliser PixiJS dans le projet : le moteur graphique reste Pygame.
+
+### D. webapp-testing
+
+À examiner uniquement si certaines méthodes de validation sont applicables.
+
+Ne pas remplacer Pytest par des outils de test Web.
+
+### E. skill-creator
+
+À utiliser uniquement si une réelle nécessité de créer un Skill spécialisé est identifiée et si cela est explicitement justifié.
+
+## Skills à ne pas utiliser sans justification
+
+Les Skills suivants ne sont pas adaptés par défaut à ce projet :
+
+- threejs-webgl
+- react-three-fiber
+- babylonjs-engine
+- aframe-webxr
+- gsap-scrolltrigger
+- expo-dev-client
+- expo-deployment
+- expo-api-routes
+- native-data-fetching
+- motion-framer
+- mcp-builder
+
+Ne transforme pas ce projet Python en application React, Electron ou Web.
+
+Le choix technologique est définitif : Python + Pygame + Socket TCP.
+
+## Documentation des Skills
+
+Créer :
+
+`docs/SKILLS_USAGE.md`
+
+Pour chaque Skill utilisé, indiquer :
+
+- Son nom.
+- Son chemin.
+- Son utilité.
+- Les parties du projet concernées.
+- Les consignes réellement appliquées.
+
+Si aucun Skill n'est pertinent pour une partie technique, le préciser.
+
+---
+
+# 10. ARCHITECTURE LOGICIELLE
+
+Adopter une architecture modulaire avec séparation stricte des responsabilités.
+
+Structure cible :
+
+Police-Voleur/
+│
+├── main.py
+├── requirements.txt
+├── README.md
+├── config.py
+│
+├── core/
+│   ├── graph.py
+│   ├── game_state.py
+│   ├── game_rules.py
+│   ├── game_manager.py
+│   ├── position_generator.py
+│   └── constants.py
+│
+├── ai/
+│   ├── minimax.py
+│   ├── alpha_beta.py
+│   ├── evaluation.py
+│   ├── decision_tree.py
+│   ├── move_ordering.py
+│   └── transposition_table.py
+│
+├── interface/
+│   ├── app.py
+│   ├── menu.py
+│   ├── board.py
+│   ├── player.py
+│   ├── animations.py
+│   ├── components/
+│   └── screens/
+│
+├── modes/
+│   ├── demo.py
+│   ├── single_player.py
+│   └── multiplayer.py
+│
+├── multiplayer/
+│   ├── server.py
+│   ├── client.py
+│   ├── protocol.py
+│   ├── network_manager.py
+│   └── session.py
+│
+├── assets/
+│   ├── images/
+│   ├── fonts/
+│   └── sounds/
+│
+├── docs/
+│   ├── BOARD_ANALYSIS.md
+│   ├── GRAPH_MODEL.md
+│   ├── AI_DESIGN.md
+│   ├── NETWORK_ARCHITECTURE.md
+│   └── SKILLS_USAGE.md
+│
+└── tests/
+    ├── test_graph.py
+    ├── test_rules.py
+    ├── test_initialization.py
+    ├── test_minimax.py
+    ├── test_alpha_beta.py
+    ├── test_modes.py
+    └── test_network.py
+
+Tu peux adapter cette structure si une amélioration architecturale est justifiée, mais conserve la séparation entre le moteur de jeu, l'IA, l'interface et le réseau.
+
+Évite les fichiers gigantesques contenant toutes les fonctionnalités.
+
+Évite également la sur-ingénierie et les abstractions inutiles.
+
+---
+
+# 11. TESTS ET QUALITÉ
+
+Utiliser Pytest.
+
+Créer des tests pour toutes les fonctionnalités importantes.
+
+## Tests du graphe
+
+- Tous les sommets possèdent des identifiants uniques.
+- Les arêtes sont valides.
+- Les connexions sont cohérentes.
+- Le centre est correctement identifié.
+- Les déplacements respectent la topologie.
+
+## Tests des règles
+
+- Initialisation correcte.
+- Positions uniques.
+- Aucun policier au centre.
+- Aucun chevauchement.
+- Alternance des tours.
+- Un seul policier par tour.
+- Interdiction des sauts.
+- Interdiction des déplacements illégaux.
+- Retour au centre du voleur.
+- Blocage du voleur.
+
+## Tests IA
+
+- Minimax génère uniquement des déplacements légaux.
+- Les scores terminaux sont prioritaires.
+- Le voleur cherche le centre.
+- Les policiers cherchent à bloquer le voleur.
+- Alpha-Beta produit la même décision optimale que Minimax à profondeur et ordre de recherche équivalents.
+- Alpha-Beta réduit effectivement les explorations sur des scénarios adaptés.
+- Les états terminaux sont correctement gérés.
+
+## Tests réseau
+
+- Connexion de deux clients.
+- Attribution des rôles.
+- Refus des rôles identiques.
+- Synchronisation des déplacements.
+- Refus des actions hors tour.
+- Refus des mouvements illégaux.
+- Gestion des déconnexions.
+- Gestion des messages invalides.
+
+## Tests des trois modes
+
+Chaque mode doit être testé indépendamment.
+
+Aucun mode ne doit avoir des règles différentes des autres.
+
+---
+
+# 12. MÉTHODOLOGIE DE TRAVAIL OBLIGATOIRE
+
+Ne développe pas tout simultanément.
+
+Respecte les phases suivantes.
+
+## PHASE 1 — AUDIT ET CONCEPTION
+
+- Examiner le répertoire de travail.
+- Identifier l'image originale.
+- Examiner les Skills installés.
+- Lire les Skills pertinents.
+- Analyser le plateau.
+- Définir le graphe.
+- Définir l'architecture.
+- Documenter les décisions.
+
+Livrable : documentation technique initiale.
+
+Ne commence pas l'interface avant d'avoir validé le modèle du graphe.
+
+## PHASE 2 — MOTEUR DU JEU
+
+Développer :
+
+- Le graphe.
+- Les positions.
+- Les déplacements légaux.
+- Les tours.
+- Les conditions de victoire.
+- L'initialisation aléatoire.
+
+Exécuter les tests.
+
+Livrable : moteur de jeu fonctionnel, indépendant de Pygame.
+
+## PHASE 3 — INTELLIGENCE ARTIFICIELLE
+
+Développer :
+
+- Minimax.
+- Alpha-Beta.
+- Fonction d'évaluation.
+- BFS.
+- Arbre de décision.
+- Optimisations.
+
+Tester l'IA sur plusieurs scénarios.
+
+Livrable : IA fonctionnelle et mesurable.
+
+## PHASE 4 — INTERFACE GRAPHIQUE
+
+Développer :
+
+- Menu principal.
+- Plateau fidèle au dessin.
+- Personnages.
+- Animations.
+- Panneaux d'informations.
+- Écrans de résultat.
+
+Livrable : application graphique opérationnelle.
+
+## PHASE 5 — MODE DÉMO
+
+Intégrer les deux intelligences artificielles.
+
+Créer le panneau de visualisation Minimax.
+
+Livrable : démonstration IA contre IA.
+
+## PHASE 6 — MODE SINGLE PLAYER
+
+Intégrer les deux possibilités de jeu humain contre IA.
+
+Livrable : mode solo complet.
+
+## PHASE 7 — MODE MULTIPLAYER
+
+Développer le serveur et les clients TCP.
+
+Tester la communication entre deux appareils sur un réseau Wi-Fi réel.
+
+Livrable : mode multijoueur opérationnel.
+
+## PHASE 8 — VALIDATION ET FINALISATION
+
+- Exécuter tous les tests.
+- Corriger les bugs.
+- Optimiser les performances.
+- Vérifier les trois modes.
+- Vérifier l'ergonomie.
+- Mettre à jour la documentation.
+- Préparer les instructions de lancement.
+
+Livrable : application complète et stable.
+
+---
+
+# 13. EXIGENCES DE QUALITÉ ET INTERDICTIONS
+
+Tu dois respecter les règles suivantes :
+
+1. Ne jamais produire de fausses fonctionnalités.
+2. Ne jamais simuler un algorithme Minimax sans véritable recherche dans un arbre de décision.
+3. Ne jamais utiliser des déplacements codés arbitrairement dans l'interface.
+4. Ne jamais contourner les règles du moteur depuis Pygame.
+5. Ne jamais laisser un client réseau décider seul de l'état officiel du jeu.
+6. Ne jamais bloquer la boucle graphique pendant un calcul IA.
+7. Ne jamais ignorer les erreurs.
+8. Ne jamais déclarer une fonctionnalité terminée sans l'avoir testée.
+9. Ne pas utiliser de données fictives pour prétendre que le multijoueur fonctionne.
+10. Ne pas ajouter de fonctionnalités inutiles qui compliquent le projet.
+11. Ne pas remplacer les technologies imposées.
+12. Ne pas dégrader une fonctionnalité déjà opérationnelle pour en développer une autre.
+
+Le code doit être :
+- Lisible.
+- Modulaire.
+- Typé lorsque pertinent.
+- Documenté.
+- Testable.
+- Robuste.
+- Maintenable.
+
+---
+
+# 14. DOCUMENTATION ET LIVRAISON
+
+À la fin, produire :
+
+1. README.md complet.
+2. Documentation de l'installation.
+3. Documentation des commandes de lancement.
+4. Description de l'architecture.
+5. Modélisation du graphe.
+6. Explication de Minimax.
+7. Explication de l'élagage Alpha-Beta.
+8. Documentation du protocole réseau.
+9. Documentation des Skills utilisés.
+10. Résultats des tests.
+
+Prévoir les commandes suivantes ou leurs équivalents :
+
+Installation :
+
+`pip install -r requirements.txt`
+
+Lancement du jeu :
+
+`python main.py`
+
+Lancement du serveur :
+
+`python -m multiplayer.server`
+
+Les commandes doivent réellement fonctionner avec l'architecture retenue.
+
+---
+
+# 15. CRITÈRES D'ACCEPTATION FINAUX
+
+Le projet n'est terminé que lorsque :
+
+- Le plateau correspond à l'image originale.
+- Le graphe est correct.
+- Les déplacements sont conformes aux règles.
+- Les policiers peuvent choisir lequel des trois déplacer.
+- Le voleur gagne en revenant au centre.
+- Les policiers gagnent en bloquant tous les déplacements du voleur.
+- Minimax fonctionne pour les deux camps.
+- Alpha-Beta fonctionne réellement.
+- Le mode Démo fonctionne.
+- Le mode Single Player fonctionne dans les deux configurations.
+- Le mode Multiplayer fonctionne entre deux ordinateurs.
+- Les rôles identiques sont refusés.
+- Les erreurs réseau sont correctement gérées.
+- Les tests sont réussis.
+- La documentation est disponible.
+
+À la fin de chaque phase, fournis un compte rendu concis :
+
+- Travail réalisé.
+- Fichiers créés ou modifiés.
+- Tests exécutés.
+- Résultats obtenus.
+- Problèmes identifiés.
+- Prochaine phase.
+
+Ne prétends jamais qu'un test est réussi s'il n'a pas été exécuté.
+
+---
+
+# 16. INSTRUCTION FINALE
+
+Commence maintenant par examiner le projet existant, les ressources disponibles, l'image originale du plateau et les Skills installés.
+
+Ne commence pas par générer aveuglément tous les fichiers.
+
+Commence par l'analyse et la conception technique.
+
+Ensuite, développe réellement le projet en respectant toutes les phases.
+
+Tu es autorisé à prendre les décisions techniques nécessaires lorsque les exigences sont suffisamment précises.
+
+En revanche, lorsqu'une règle de jeu ou une connexion du graphe est ambiguë, signale précisément le problème et demande une clarification avant de figer le comportement.
+
+**PRIORITÉ ABSOLUE :**
+
+1. Exactitude du graphe.
+2. Exactitude des règles du jeu.
+3. Fiabilité de Minimax et Alpha-Beta.
+4. Fonctionnement réel des trois modes.
+5. Fiabilité du multijoueur.
+6. Qualité de l'interface.
+7. Performance et maintenabilité.
+
+Je veux un projet universitaire techniquement sérieux, qui fonctionne réellement et dont je puisse expliquer chaque partie à mon enseignant.
+
+Ne t'arrête pas à la conception : réalise le projet jusqu'à l'obtention d'une application testée, fonctionnelle et documentée.

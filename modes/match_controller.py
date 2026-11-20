@@ -9,6 +9,7 @@ from __future__ import annotations
 import random
 
 from ai.minimax import SearchConfig, SearchEngine, SearchResult
+from ai.police_minimax import PoliceMinimaxEngine
 from config import DEMO_STEP_DELAY_SECONDS, GameSettings
 from core.constants import GameStatus, Team
 from core.game_manager import GameConfig, GameManager
@@ -47,6 +48,7 @@ class MatchController:
             rules=self.rules,
         )
         self.engine = SearchEngine(graph)
+        self.police_engine = PoliceMinimaxEngine(graph, self.config)
         self.search = AsyncSearch()
         self.speed = max(0.25, settings.demo_speed)
         self.paused = False
@@ -214,7 +216,15 @@ class MatchController:
             return
         self.thinking = self.state.turn
         self.preview = None
-        self.search.start(self.engine, self.state, self.config, self.manager.ply)
+        if self.state.turn is Team.POLICE:
+            self.police_engine.set_context(
+                self.manager.history, self.settings.repetition_limit
+            )
+            self.search.start(
+                self.police_engine, self.state, self.config, self.manager.ply
+            )
+        else:
+            self.search.start(self.engine, self.state, self.config, self.manager.ply)
         self._phase = "search"
         self._timer = 0.0
 

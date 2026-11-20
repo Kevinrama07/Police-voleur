@@ -13,6 +13,7 @@ Conventions :
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ai.evaluation import evaluate
@@ -28,6 +29,21 @@ from core.graph import Graph
 from core.ruleset import DEFAULT_RULES, RuleSet
 
 INFINITY = 1_000_000
+
+Evaluator = Callable[[Graph, GameState, int, RuleSet], int]
+
+
+def _score(
+    graph: Graph,
+    state: GameState,
+    ply: int,
+    rules: RuleSet,
+    evaluator: Evaluator | None,
+) -> int:
+    if evaluator is None:
+        return evaluate(graph, state, ply, rules)
+    return evaluator(graph, state, ply, rules)
+
 
 EXACT = 0
 LOWER = 1
@@ -50,6 +66,7 @@ class SearchConfig:
     record_tree: bool = False
     tree_depth: int = 2
     rules: RuleSet = DEFAULT_RULES
+    evaluator: Evaluator | None = None
 
 
 @dataclass(slots=True)
@@ -183,7 +200,7 @@ class SearchEngine:
         if not root_moves:
             return SearchResult(
                 move=None,
-                score=evaluate(self.graph, state, ply, cfg.rules),
+                score=_score(self.graph, state, ply, cfg.rules, cfg.evaluator),
                 depth=0,
                 completed=True,
                 nodes=0,
@@ -200,7 +217,7 @@ class SearchEngine:
         ordered_root = self.order_moves(state, root_moves) if cfg.order_moves else root_moves
 
         best_move: Move = ordered_root[0]
-        best_score = evaluate(self.graph, state, ply, cfg.rules)
+        best_score = _score(self.graph, state, ply, cfg.rules, cfg.evaluator)
         best_depth = 0
         root_scores: tuple[MoveEvaluation, ...] = ()
         best_tree: SearchNode | None = None
@@ -348,7 +365,7 @@ class SearchEngine:
             )
 
         if depth <= 0:
-            value = evaluate(ctx.graph, state, ply, ctx.config.rules)
+            value = _score(ctx.graph, state, ply, ctx.config.rules, ctx.config.evaluator)
             if node is not None:
                 node.score = value
             return value, node
@@ -376,7 +393,7 @@ class SearchEngine:
             value = (
                 POLICE_WIN_SCORE
                 if state.turn is Team.THIEF
-                else evaluate(ctx.graph, state, ply, ctx.config.rules)
+                else _score(ctx.graph, state, ply, ctx.config.rules, ctx.config.evaluator)
             )
             if node is not None:
                 node.score = value

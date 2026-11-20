@@ -121,7 +121,7 @@ def test_demo_plays_without_human() -> None:
         teams = [move.team for move in moves]
         assert teams[0] is Team.THIEF
         assert all(left is not right for left, right in zip(teams, teams[1:]))
-        assert controller.status is GameStatus.ONGOING
+        assert controller.status is GameStatus.POLICE_WIN
     finally:
         controller.close()
 

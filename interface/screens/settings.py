@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pygame
 
-from config import DEMO_STEP_DELAY_SECONDS, GameSettings
+from config import DEMO_STEP_DELAY_SECONDS, Difficulty, GameSettings
 from core.constants import (
     DEFAULT_MAX_MOVES,
     DEFAULT_REPETITION_LIMIT,
@@ -20,7 +20,13 @@ class SettingsScreen(Scene):
     def __init__(self, app: App) -> None:
         self.app = app
         self.settings = app.settings
+        self.difficulty_button = Button(
+            rect=pygame.Rect(980, 74, 190, 46),
+            label=self._difficulty_label(),
+            on_click=self._cycle_difficulty,
+        )
         self.buttons = [
+            self.difficulty_button,
             Button(
                 rect=pygame.Rect(120, 700, 190, 46),
                 label="Retour",
@@ -35,6 +41,29 @@ class SettingsScreen(Scene):
         self.sliders = self._build_sliders()
         self.toggles = self._build_toggles()
 
+    def _difficulty_label(self) -> str:
+        labels = {
+            Difficulty.FACILE: "Difficulté : Facile",
+            Difficulty.NORMAL: "Difficulté : Normal",
+            Difficulty.DIFFICILE: "Difficulté : Difficile",
+            Difficulty.PERSONNALISE: "Difficulté : Perso",
+        }
+        return labels[self.settings.difficulty]
+
+    def _cycle_difficulty(self) -> None:
+        order = (Difficulty.FACILE, Difficulty.NORMAL, Difficulty.DIFFICILE)
+        current = self.settings.difficulty
+        index = order.index(current) if current in order else 1
+        self.settings.apply_difficulty(order[(index + 1) % len(order)])
+        self.app.go_to(lambda: SettingsScreen(self.app))
+
+    def _setter(self, name: str, cast):
+        def apply(value) -> None:
+            self.settings.mark_custom()
+            setattr(self.settings, name, cast(value))
+
+        return apply
+
     def _build_sliders(self) -> list[Slider]:
         settings = self.settings
         return [
@@ -46,7 +75,7 @@ class SettingsScreen(Scene):
                 step=1,
                 value=settings.ai_depth,
                 formatter=lambda v: f"{int(v)} demi-coups",
-                on_change=lambda v: setattr(settings, "ai_depth", int(v)),
+                on_change=self._setter("ai_depth", int),
             ),
             Slider(
                 rect=pygame.Rect(170, 314, 420, 60),
@@ -56,7 +85,7 @@ class SettingsScreen(Scene):
                 step=0.25,
                 value=settings.ai_time_limit,
                 formatter=lambda v: f"{v:.2f} s",
-                on_change=lambda v: setattr(settings, "ai_time_limit", float(v)),
+                on_change=self._setter("ai_time_limit", float),
             ),
             Slider(
                 rect=pygame.Rect(170, 392, 420, 60),
@@ -66,7 +95,7 @@ class SettingsScreen(Scene):
                 step=0.25,
                 value=settings.demo_speed,
                 formatter=lambda v: f"×{v:.2f}  ({DEMO_STEP_DELAY_SECONDS / v:.2f} s/coup)",
-                on_change=lambda v: setattr(settings, "demo_speed", float(v)),
+                on_change=self._setter("demo_speed", float),
             ),
             Slider(
                 rect=pygame.Rect(170, 470, 420, 60),
@@ -76,7 +105,9 @@ class SettingsScreen(Scene):
                 step=1,
                 value=0 if settings.seed is None else settings.seed,
                 formatter=lambda v: "aléatoire" if int(v) == 0 else f"graine {int(v)}",
-                on_change=lambda v: setattr(settings, "seed", None if int(v) == 0 else int(v)),
+                on_change=self._setter(
+                    "seed", lambda v: None if int(v) == 0 else int(v)
+                ),
             ),
             Slider(
                 rect=pygame.Rect(720, 236, 400, 60),
@@ -86,7 +117,7 @@ class SettingsScreen(Scene):
                 step=1,
                 value=settings.return_cooldown,
                 formatter=lambda v: f"{int(v)} demi-coups",
-                on_change=lambda v: setattr(settings, "return_cooldown", int(v)),
+                on_change=self._setter("return_cooldown", int),
             ),
             Slider(
                 rect=pygame.Rect(720, 340, 400, 60),
@@ -96,7 +127,7 @@ class SettingsScreen(Scene):
                 step=1,
                 value=settings.repetition_limit,
                 formatter=lambda v: "désactivée" if int(v) == 0 else f"{int(v)} occurrences",
-                on_change=lambda v: setattr(settings, "repetition_limit", int(v)),
+                on_change=self._setter("repetition_limit", int),
             ),
             Slider(
                 rect=pygame.Rect(720, 418, 400, 60),
@@ -106,7 +137,7 @@ class SettingsScreen(Scene):
                 step=50,
                 value=settings.max_moves,
                 formatter=lambda v: "illimitée" if int(v) == 0 else f"{int(v)} coups",
-                on_change=lambda v: setattr(settings, "max_moves", int(v)),
+                on_change=self._setter("max_moves", int),
             ),
         ]
 
@@ -118,7 +149,7 @@ class SettingsScreen(Scene):
                 label="Centre contestable",
                 description="La police peut occuper le centre après le départ du voleur",
                 value=settings.center_contestable,
-                on_change=lambda v: setattr(settings, "center_contestable", bool(v)),
+                on_change=self._setter("center_contestable", bool),
             ),
         ]
 
@@ -134,6 +165,7 @@ class SettingsScreen(Scene):
         for name in (
             "ai_depth",
             "ai_time_limit",
+            "difficulty",
             "demo_speed",
             "seed",
             "return_cooldown",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core.constants import DEFAULT_RETURN_COOLDOWN
+from core.constants import DEFAULT_CENTER_CONTESTABLE, DEFAULT_RETURN_COOLDOWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +20,7 @@ class RuleSet:
     """
 
     return_cooldown: int = DEFAULT_RETURN_COOLDOWN
-    center_contestable: bool = True
+    center_contestable: bool = DEFAULT_CENTER_CONTESTABLE
 
     def thief_can_return(self, ply: int) -> bool:
         return ply >= max(0, self.return_cooldown)

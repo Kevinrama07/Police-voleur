@@ -150,6 +150,8 @@ def find_server(
                 message, address = discovery_socket.recvfrom(128)
             except socket.timeout:
                 continue
+            except ConnectionResetError:
+                continue
             except OSError:
                 if cancelled is not None and cancelled.is_set():
                     return None

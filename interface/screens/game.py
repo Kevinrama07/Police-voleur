@@ -1,6 +1,6 @@
-"""Écran de partie : plateau interactif, HUD, panneau IA et arbre Minimax.
+"""Écran de partie : plateau interactif, HUD et panneau IA.
 
-L'écran ne contient aucune règle : il observe un `MatchController` (démo ou solo)
+L'écran ne contient aucune règle : il observe un `MatchController`
 et lui transmet les intentions du joueur. Le rendu est purement présentationnel.
 """
 
@@ -16,7 +16,7 @@ from interface.app import App, Scene
 from interface.board import BoardRenderer
 from interface.components.controls import Button, pill, section_title, thinking_dots
 from interface.theme import text
-from modes.match_controller import MatchController
+from match import MatchController
 
 BOARD_AREA = pygame.Rect(30, 30, 712, 740)
 PANEL_AREA = pygame.Rect(766, 30, 484, 740)

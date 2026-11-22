@@ -1,4 +1,4 @@
-"""Tests des contrôleurs de mode : recherche asynchrone, démo, solo, réseau."""
+"""Tests des contrôleurs de mode : recherche asynchrone, match local, réseau."""
 
 from __future__ import annotations
 
@@ -7,17 +7,18 @@ from typing import Any
 
 import pytest
 
-from ai.minimax import SearchConfig, SearchEngine
+from ai.contrat import Context, Stats
+from ai.minimax_voleur import choose_move as thief_bot
 from config import GameSettings
 from core.constants import GameStatus, Team
 from core.game_manager import GameConfig, GameManager
 from core.game_rules import legal_moves
 from core.game_state import GameState
 from core.graph import build_default_graph
+from match import MatchController, Mode
 from modes.ai_runner import AsyncSearch
-from modes.demo import DemoController
 from modes.multiplayer import NetworkController
-from modes.single_player import SinglePlayerController
+from stats import StatsStore
 
 GRAPH = build_default_graph()
 
@@ -68,13 +69,9 @@ class StubNetwork:
 def test_async_search_returns_a_legal_move() -> None:
     manager = game_manager()
     runner = AsyncSearch()
+    ctx = Context(depth=2, deadline=time.perf_counter() + 2.0, stats=Stats())
     try:
-        assert runner.start(
-            SearchEngine(GRAPH),
-            manager.state,
-            SearchConfig(max_depth=2, time_limit=2.0),
-            manager.ply,
-        )
+        assert runner.start(thief_bot, GRAPH, manager.state, ctx, manager.ply)
         assert runner.busy
         result = None
         deadline = time.time() + 6.0
@@ -90,9 +87,14 @@ def test_async_search_returns_a_legal_move() -> None:
 
 def test_async_search_cancel_is_safe() -> None:
     manager = game_manager()
+
+    def slow_bot(graph, state, ply, ctx):
+        time.sleep(0.5)
+        return manager.legal_moves()[0]
+
     runner = AsyncSearch()
     try:
-        runner.start(SearchEngine(GRAPH), manager.state, SearchConfig(max_depth=3), 0)
+        assert runner.start(slow_bot, GRAPH, manager.state, Context(), 0)
         runner.cancel()
         deadline = time.time() + 5.0
         while runner.busy and time.time() < deadline:
@@ -102,20 +104,22 @@ def test_async_search_cancel_is_safe() -> None:
         runner.shutdown()
 
 
-# ---------------------------------------------------------------------- démo
+# ---------------------------------------------------------------------- match automatique
 
 
-def test_demo_plays_without_human() -> None:
+def test_match_auto_plays_without_human() -> None:
     settings = GameSettings(ai_depth=1, ai_time_limit=1.0, demo_speed=4.0, seed=12)
-    controller = DemoController(GRAPH, settings)
+    controller = MatchController(GRAPH, settings, mode=Mode.AUTO)
     try:
         moves = []
-        for _ in range(400):
+        deadline = time.time() + 30.0
+        while not controller.is_over and time.time() < deadline:
             controller.update(1 / 60)
             move = controller.take_animation()
             if move is not None:
                 moves.append(move)
-            time.sleep(0.001)
+            time.sleep(0.005)
+        assert controller.is_over
         assert len(moves) >= 2
         assert controller.ply == len(moves)
         teams = [move.team for move in moves]
@@ -126,9 +130,9 @@ def test_demo_plays_without_human() -> None:
         controller.close()
 
 
-def test_demo_pause_and_step() -> None:
+def test_match_auto_pause_and_step() -> None:
     settings = GameSettings(ai_depth=1, ai_time_limit=1.0, demo_speed=4.0, seed=3)
-    controller = DemoController(GRAPH, settings)
+    controller = MatchController(GRAPH, settings, mode=Mode.AUTO)
     try:
         controller.set_paused(True)
         for _ in range(60):
@@ -152,9 +156,9 @@ def test_demo_pause_and_step() -> None:
         controller.close()
 
 
-def test_solo_human_thief_moves_first() -> None:
+def test_match_human_thief_moves_first() -> None:
     settings = GameSettings(ai_depth=1, ai_time_limit=1.0, seed=21)
-    controller = SinglePlayerController(GRAPH, settings, Team.THIEF)
+    controller = MatchController(GRAPH, settings, human_team=Team.THIEF)
     try:
         assert controller.can_human_play
         targets = controller.legal_targets()
@@ -168,9 +172,9 @@ def test_solo_human_thief_moves_first() -> None:
         controller.close()
 
 
-def test_solo_human_police_selects_then_moves() -> None:
+def test_match_human_police_selects_then_moves() -> None:
     settings = GameSettings(ai_depth=1, ai_time_limit=1.0, seed=8, return_cooldown=0)
-    controller = SinglePlayerController(GRAPH, settings, Team.POLICE)
+    controller = MatchController(GRAPH, settings, human_team=Team.POLICE)
     try:
         assert not controller.can_human_play
         assert controller.legal_targets() == set()
@@ -319,3 +323,13 @@ def test_network_opponent_label() -> None:
     controller = NetworkController(GRAPH, GameSettings(), network, _network_start())
     assert controller.opponent_label() == "Joueur 2 · THIEF"
     assert controller.status in (GameStatus.ONGOING,)
+
+
+def test_match_enregistre_les_statistiques_une_seule_fois(tmp_path) -> None:
+    store = StatsStore(tmp_path / "stats.json")
+    controller = MatchController(GRAPH, GameSettings(), stats_store=store)
+    controller.manager._status = GameStatus.POLICE_WIN
+    controller._record_stats()
+    controller._record_stats()
+    assert store.load().auto.police_wins == 1
+    assert store.load().auto.games == 1

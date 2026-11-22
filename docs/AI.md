@@ -1,64 +1,116 @@
-# IA — Minimax, Alpha-Beta et évaluation heuristique
+# IA — un contrat, deux minimax alpha-bêta
 
-Module `ai/` (aucune dépendance à Pygame). La POLICE est le **maximizer**, le VOLEUR le
-**minimizer** ; les scores terminaux (victoire police `+10 000`, victoire voleur `−10 000`) sont
-fixes et toujours prioritaires sur l'heuristique.
+Le dossier `ai/` ne dépend pas de Pygame. Chaque camp possède **son propre minimax** :
 
-## 1. Évaluation (`ai/evaluation.py`)
+| Fichier | Rôle | Algorithme |
+| --- | --- | --- |
+| `ai/contrat.py` | Interface commune | `Bot`, `Context`, `Stats`, `SearchNode`, `Result` |
+| `ai/minimax_voleur.py` | Voleur (MIN) | Minimax alpha-bêta + heuristique + approfondissement itératif |
+| `ai/minimax_police.py` | Police (MAX) | Minimax alpha-bêta + table exacte comme évaluation feuille |
+| `ai/exact_table.py` | Évaluation police | Table rétrograde des 47 880 positions canoniques |
 
-Score heuristique du point de vue de la police :
+```python
+Bot = Callable[[Graph, GameState, int, Context | None], Move]
+```
+
+`Context` transporte `rules`, `depth`, `repetition_limit`, `history`, `deadline`, `stats` et
+`collect_tree`.
+Le moteur reste seul juge de la légalité et du résultat : les bots ne font que proposer un coup.
+
+## 1. Voleur — minimax alpha-bêta (`ai/minimax_voleur.py`)
+
+Scores du **point de vue police** : la police maximise, le voleur minimise.
+
+Heuristique à 3 termes (plus un garde-fou de connectivité) :
 
 | Terme | Poids | Intention |
-|---|---|---|
-| distance voleur → centre | `+120 / arête` | éloigner le voleur de sa zone de victoire |
-| course au centre (police) | `−60 / arête` | occuper le centre avant le voleur (centre libre) |
-| proximité du policier le plus proche | `−40 / arête` | resserrer l'étau |
-| mobilité du voleur | `−45 / coup` | réduire ses échappatoires |
-| sommets atteignables par le voleur | `−3 / sommet` | limiter son territoire |
-| pression sur le chemin voleur → centre | `−35 / sommet` | couper la route du retour |
-| chemins d'évasion (mobilité gardant le centre accessible) | `−30 / coup` | anticiper les fuites |
-| centre inaccessible au voleur | `+2 500` | centre occupé : retour impossible |
+| --- | --- | --- |
+| distance voleur → centre | `+100 / arête` | éloigner le voleur de sa zone de victoire |
+| mobilité du voleur | `−40 / coup` | réduire ses échappatoires |
+| proximité du policier le plus proche | `−30 / arête` | resserrer l'étau |
+| sommets atteignables | `−2 / sommet` | limiter son territoire |
+| centre inaccessible | `+1 500` | renforcer un blocage durable |
 
-`evaluate(graph, state, ply=None)` : `ply=None` = évaluation statique (cooldown ignoré) ; la
-recherche transmet le `ply` réel pour rester cohérente avec `legal_moves`.
+Recherche :
 
-## 2. Recherche (`ai/minimax.py`)
+- profondeur configurable (`ctx.depth`, défaut 3) ;
+- élagage Alpha-Beta avec ordonnancement BFS (vers le centre pour le voleur, vers le
+  voleur pour la police) ;
+- approfondissement itératif : le meilleur coup complet reste disponible si `deadline`
+  expire ;
+- coup retour au centre détecté comme défaite immédiate (`-MATE`) ;
+- `Stats` alimente l'overlay pédagogique : nœuds, coupures, scores racine et arbre exploré.
 
-- **Minimax** récursif à profondeur limitée, **Alpha-Beta** optionnel, **table de transposition**
-  (drapeaux `EXACT` / `LOWER` / `UPPER`, clé = position + état du cooldown écrêté), **ordonnancement
-  des coups** (policiers : rapprochement du voleur ; voleur : rapprochement du centre),
-  **approfondissement itératif** avec limite de temps (`SearchTimeout`).
-- `SearchConfig` : `max_depth`, `time_limit`, `alpha_beta`, `use_transposition`, `order_moves`,
-  `record_tree`, `tree_depth`, `rules` (`RuleSet`), `evaluator` (optionnel).
-- `search(state, config, ply=0)` : la racine est jouée à fenêtre pleine, donc les scores racine sont
-  **exacts** ; `SearchResult` expose `move`, `score`, `depth`, `nodes`, `cutoffs`, `tt_hits`,
-  `elapsed`, `root_scores` et l'arbre pédagogique (`SearchNode`).
-- `value_full(state, depth, ply=0)` : Minimax pur, référence des tests d'équivalence.
-- Le cooldown est propagé (`ply` + 1 par demi-coup) : le retour au centre est illégal tant que
-  `ply < rules.return_cooldown`, et la détection de blocage tient compte de cette restriction.
-- Les nulles par répétition ne sont **pas** modélisées dans l'arbre : `core.game_manager` reste seul
-  juge du résultat ; le moteur POLICE ajoute son propre filtre en racine (section suivante).
+## 2. Police — minimax alpha-bêta (`ai/minimax_police.py`)
 
-## 3. Minimax renforcé de la POLICE (`ai/police_minimax.py`)
+La police utilise le **même squelette minimax** que le voleur : `minimax(...)` alterne
+les nœuds MAX (police) et MIN (voleur), avec élagage alpha-bêta et approfondissement
+itératif. La différence est l'évaluation feuille : au lieu d'une heuristique approximative,
+elle consulte la table exacte décrite ci-dessous.
 
-La POLICE utilise le même **Minimax/Alpha-Beta** que le VOLEUR, avec deux renforts :
+La police ne devine pas : elle **résout le jeu** une fois pour toutes pour un graphe et
+un `RuleSet` donnés.
 
-- `evaluator=exact_evaluation` note les feuilles avec la table rétrograde (`ai/police_solver.py`) :
-  victoire, défaite ou nulle, avec distance de capture. La recherche reste bien un Minimax,
-  mais chaque feuille connaît la valeur exacte du jeu.
-- Le coup racine est choisi parmi `root_scores` en écartant ceux qui provoqueraient une 3ᵉ
-  répétition, tant qu'un coup non répétitif reste disponible.
+État encodé : `(voleur, p0, p1, p2, camp)` avec `p0 < p1 < p2` (symétrie des policiers
+éliminée). Pour 21 sommets : `21 × C(20,3) × 2 = 47 880` positions, stockées dans un
+entier `sid = ((((v*21+p0)*21+p1)*21+p2)<<1)|camp`.
 
-Le VOLEUR n'est pas modifié : `MatchController` lui passe toujours `SearchEngine` avec
-l'évaluation heuristique historique. La POLICE gagne ainsi contre le Minimax du VOLEUR
-quel que soit le réglage de profondeur de ce dernier.
+Deux attracteurs inverses :
 
-## 4. Vérifications
+1. **Victoire police** : si toutes les issues du voleur sont occupées, l'état est gagnant
+   pour la police ; tout parent policier menant à un état gagnant devient gagnant.
+2. **Défaite voleur** : si le voleur peut rejoindre le centre, l'état est perdant ; tout
+   parent voleur dont **tous** les fils sont perdants devient perdant.
 
-- `tests/test_ai.py` : légalité multi-graines, équivalence stricte Alpha-Beta ↔ Minimax,
-  élagage effectif (`nodes`, `cutoffs`), transposition, limite de temps, cooldown du centre,
-  blocage policier, heuristiques, arbre enregistré.
-- `tests/test_police_minimax.py` : parties complètes où le Minimax renforcé de la POLICE bat
-  le Minimax du VOLEUR.
-- `python tools/benchmark_ai.py --games 20 --depth 3` : auto-jeu complet, temps par coup, nœuds,
-  coupures.
+La propagation suit les prédécesseurs avec un compteur de fils restants. Le cooldown est
+géré séparément par `value_sid(sid, k)` : tant que `k < return_cooldown`, la valeur est
+recalculée avec mémoïsation sur `(sid, k)` ; au-delà, la table terminale s'applique.
+
+Valeurs : victoire = distance de capture, défaite = `1 000 000 − distance`, nulle = `500 000`.
+
+Au choix du coup, la racine MAX maximise cette valeur exacte, puis départage avec :
+1. moins de répétitions ; 2. territoire atteignable réduit ; 3. destination lexicographique.
+Une valeur gagnante est transformée en nulle si elle déclencherait la 3ᵉ répétition.
+
+## 3. Arbre exploré exporté
+
+Les deux minimax construisent un `SearchNode` par nœud réellement visité lorsque
+`ctx.collect_tree=True`. Chaque nœud porte `score`, `camp maximisant`, `coup`, `enfants` et
+`cutoff`. Le moteur demande cet export en mode graphique ; le benchmark le désactive pour
+rester léger.
+
+`AsyncSearch` copie `Stats.tree` dans `Result.tree` à chaque recherche terminée. L'overlay
+`T` affiche alors la racine du dernier niveau complet, les 12 meilleurs coups racine et
+les coupures. Seul le dernier niveau complet est conservé : une recherche interrompue par la
+limite de temps ne remplace pas l'arbre précédent.
+
+## 4. Optimisation mesurée
+
+Profilage `cProfile` avant optimisation : `3,514 s`, `_build = 2,409 s`, `_attractor =
+0,846 s`, 209 310 appels à `sorted`.
+
+Actions appliquées :
+
+- codage `sid` en ligne au lieu d'appels de méthode ;
+- tri explicite des policiers par comparaisons au lieu de `tuple(sorted(...))` ;
+- `remaining` construit depuis les clés de `predecessors` (47 k au lieu de 389 k états) ;
+- `setdefault` lié une fois dans `_build`.
+
+Après optimisation : table initiale `~1 630 ms` (au lieu de `~2 141 ms`), cProfile total
+`3,062 s`, 10/10 victoires policières contre voleur aléatoire et contre voleur Alpha-Beta.
+
+Principe appliqué : **profiler avant d'optimiser** (skill
+`wshobson/agents@python-performance-optimization`, voir `docs/SKILLS_USAGE.md`).
+
+## 5. Vérifications
+
+```powershell
+python -m pytest -q
+python tools/benchmark_ai.py --games 10 --depth 3
+```
+
+- `tests/test_bots.py` : présence des deux minimax explicites, légalité, déterminisme,
+  export d'arbre visité, 5 victoires contre aléatoire, 3 contre Alpha-Beta.
+- `tests/test_config.py` : traduction unique des réglages et contrat `Context`.
+- `tests/test_match.py` : modes `AUTO` / `MANUEL`.
+- Benchmark attendu : `police_win=10`, `thief_win=0`, `draw=0`, ~19 demi-coups/partie.

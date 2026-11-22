@@ -10,39 +10,17 @@ import pygame
 
 from config import GameSettings
 from core.constants import Team
-from core.game_manager import GameConfig
 from core.graph import build_default_graph
 from interface import theme
 from interface.app import App, Scene
-from interface.components.controls import Button, TextInput, pill
+from interface.components.controls import Button, pill
 from interface.theme import text
-from modes.multiplayer import settings_to_rules
 from multiplayer.client import NetworkError
-from multiplayer.network_manager import NetworkManager
-
-
-def split_address(value: str) -> tuple[str, int]:
-    """Analyse « ip:port » ou « hôte:port » saisi par l'utilisateur."""
-    address = value.strip()
-    if not address:
-        raise ValueError("Indiquez une adresse IP et un port.")
-    if ":" not in address:
-        raise ValueError("Format attendu : IP:port (exemple 192.168.1.20:50505).")
-    host, port_text = address.rsplit(":", 1)
-    host = host.strip()
-    if not host or " " in host:
-        raise ValueError("Adresse IP invalide.")
-    try:
-        port = int(port_text.strip())
-    except ValueError as exc:
-        raise ValueError("Port invalide : utilisez un nombre entre 1 et 65535.") from exc
-    if not 0 < port < 65536:
-        raise ValueError("Port invalide : utilisez un nombre entre 1 et 65535.")
-    return host, port
+from net import NetworkManager
 
 
 class NetworkSetup(Scene):
-    def __init__(self, app: App) -> None:
+    def __init__(self, app: App, auto_role: str | None = None) -> None:
         self.app = app
         self.graph = build_default_graph()
         self.settings: GameSettings = app.settings
@@ -57,10 +35,10 @@ class NetworkSetup(Scene):
         self._join_generation = 0
         self._search_elapsed = 0.0
         self._search_label = ""
-        self._search_mode = "discover"
+        self._retry_delay = 0.0
         self._join_thread: threading.Thread | None = None
         self._join_results: queue.Queue[
-            tuple[int, NetworkManager | None, str | None]
+            tuple[int, NetworkManager | None, str | None, bool]
         ] = queue.Queue()
 
         self.host_button = Button(
@@ -80,17 +58,6 @@ class NetworkSetup(Scene):
             label="Retour",
             on_click=self._back,
         )
-        self.address_input = TextInput(
-            rect=pygame.Rect(120, 580, 360, 44),
-            placeholder="192.168.1.20:50505",
-            max_length=64,
-            on_submit=self._submit_address,
-        )
-        self.connect_button = Button(
-            rect=pygame.Rect(492, 580, 200, 46),
-            label="Se connecter",
-            on_click=self._connect_direct,
-        )
         self.role_thief = Button(
             rect=pygame.Rect(396, 392, 220, 48),
             label="Prendre VOLEUR",
@@ -101,15 +68,17 @@ class NetworkSetup(Scene):
             label="Prendre POLICE",
             on_click=lambda: self._select_role(Team.POLICE),
         )
+        if auto_role == "host":
+            self._host()
+        elif auto_role == "join":
+            self._join()
+        elif auto_role is not None:
+            raise ValueError("auto_role doit valoir 'host' ou 'join'")
 
     # ------------------------------------------------------------------ actions
 
-    def _game_config(self) -> GameConfig:
-        return GameConfig(
-            max_moves=self.settings.max_moves,
-            repetition_limit=self.settings.repetition_limit,
-            rules=settings_to_rules(self.settings),
-        )
+    def _game_config(self):
+        return self.settings.to_game_config()
 
     def _host(self) -> None:
         self.error = ""
@@ -127,55 +96,33 @@ class NetworkSetup(Scene):
         self.error = ""
         self.notice = "Recherche d'un hôte sur le réseau local…"
         self._search_label = "Recherche d'un hôte sur le réseau local…"
-        self._search_mode = "discover"
-        self._begin_search(None)
-
-    def _connect_direct(self) -> None:
-        self._submit_address(self.address_input.value)
-
-    def _submit_address(self, value: str) -> None:
-        self.error = ""
-        self.notice = ""
-        try:
-            target = split_address(value)
-        except ValueError as exc:
-            self.error = str(exc)
-            return
-        self.address_input.focused = False
-        self._search_label = f"Connexion à {target[0]}:{target[1]}…"
-        self.notice = self._search_label
-        self._search_mode = "direct"
-        self._begin_search(target)
-
-    def _begin_search(self, target: tuple[str, int] | None) -> None:
         self.phase = "searching"
         self._search_elapsed = 0.0
+        self._retry_delay = 0.0
         self._join_cancel.clear()
         self._join_generation += 1
         generation = self._join_generation
         self._join_thread = threading.Thread(
             target=self._connect_worker,
-            args=(generation, target),
+            args=(generation,),
             name="police-join-discovery",
             daemon=True,
         )
         self._join_thread.start()
 
-    def _connect_worker(
-        self, generation: int, target: tuple[str, int] | None
-    ) -> None:
+    def _connect_worker(self, generation: int) -> None:
         network = NetworkManager()
         try:
-            if target is None:
-                address = network.join_discovered(cancelled=self._join_cancel)
-                if address is None:
-                    raise NetworkError(
-                        "Aucun hôte joignable trouvé. Vérifiez le réseau local et le "
-                        "pare-feu Windows, réessayez, ou utilisez la connexion directe "
-                        "(IP:port affichée dans le salon de l'hôte)."
-                    )
-            else:
-                network.join(*target)
+            address = network.join_discovered(cancelled=self._join_cancel)
+            if address is None:
+                network.close()
+                message = (
+                    "Aucun hôte pour le moment : nouvelle recherche automatique dans 2 s…"
+                )
+                with self._join_result_lock:
+                    if not self._join_cancel.is_set():
+                        self._join_results.put((generation, None, message, True))
+                return
             if self._join_cancel.is_set():
                 network.close()
                 return
@@ -183,13 +130,13 @@ class NetworkSetup(Scene):
             network.close()
             with self._join_result_lock:
                 if not self._join_cancel.is_set():
-                    self._join_results.put((generation, None, str(exc)))
+                    self._join_results.put((generation, None, str(exc), True))
         else:
             with self._join_result_lock:
                 if self._join_cancel.is_set():
                     network.close()
                 else:
-                    self._join_results.put((generation, network, None))
+                    self._join_results.put((generation, network, None, False))
 
     def _select_role(self, role: Team) -> None:
         if self.phase != "lobby" or not self.network.connected:
@@ -210,7 +157,6 @@ class NetworkSetup(Scene):
         self.notice = ""
 
     def _back(self) -> None:
-        self.address_input.focused = False
         if self.phase == "lobby":
             self._leave_lobby()
             return
@@ -233,7 +179,7 @@ class NetworkSetup(Scene):
 
     def _start_game(self, message: dict) -> None:
         from interface.screens.game import GameScreen
-        from modes.multiplayer import NetworkController
+        from net import NetworkController
 
         try:
             controller = NetworkController(
@@ -252,12 +198,18 @@ class NetworkSetup(Scene):
             return
         while True:
             try:
-                generation, network, error = self._join_results.get_nowait()
+                generation, network, error, retry = self._join_results.get_nowait()
             except queue.Empty:
                 break
             if generation != self._join_generation or self.phase != "searching":
                 if network is not None:
                     network.close()
+                continue
+            if retry:
+                self.error = ""
+                self.notice = error or "Nouvelle recherche automatique dans 2 s…"
+                self._search_label = self.notice
+                self._retry_delay = 2.0
                 continue
             if error is not None:
                 self.error = error
@@ -302,13 +254,7 @@ class NetworkSetup(Scene):
 
     def handle(self, event: pygame.event.Event) -> None:
         if self.phase == "choice":
-            for control in (
-                self.address_input,
-                self.connect_button,
-                self.host_button,
-                self.join_button,
-                self.back_button,
-            ):
+            for control in (self.host_button, self.join_button, self.back_button):
                 control.handle(event)
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 self._back()
@@ -331,12 +277,19 @@ class NetworkSetup(Scene):
         self._poll()
         if self.phase == "searching":
             self._search_elapsed += dt
+            active = self._join_thread is not None and self._join_thread.is_alive()
+            if not active and self._retry_delay > 0:
+                self._retry_delay -= dt
+                if self._retry_delay <= 0:
+                    self._retry_delay = 0.0
+                    retry_notice = self.notice
+                    self._join()
+                    self.notice = retry_notice or "Nouvelle recherche automatique…"
+                    self._search_label = self.notice
         self._refresh_buttons()
         for control in (
             self.host_button,
             self.join_button,
-            self.connect_button,
-            self.address_input,
             self.back_button,
             self.role_thief,
             self.role_police,
@@ -408,25 +361,13 @@ class NetworkSetup(Scene):
         )
         self.join_button.draw(surface, fonts)
 
-        theme.tracking_text(
-            surface,
-            fonts.ui(12, bold=True),
-            "CONNEXION DIRECTE (IP:PORT)",
-            (120, 556),
-            theme.TEXT_DIM,
-            2,
-        )
         text(
             surface,
             fonts.ui(13),
-            "Si la découverte UDP est bloquée : l'adresse est affichée chez l'hôte.",
-            (712, 568),
+            "Les deux PC doivent être sur le même réseau local.",
+            (120, 586),
             theme.TEXT_DIM,
         )
-        self.address_input.draw(surface, fonts)
-        self.connect_button.draw(surface, fonts)
-
-        self._draw_feedback(surface, (120, 648))
 
     def _draw_searching(self, surface: pygame.Surface) -> None:
         fonts = self.app.fonts
@@ -441,34 +382,19 @@ class NetworkSetup(Scene):
             theme.TEXT_MUTED,
         )
         dots = "." * (1 + int(self._search_elapsed * 3) % 3)
-        busy = "Connexion" if self._search_mode == "direct" else "Recherche"
         text(
             surface,
             fonts.mono(14),
-            f"{busy} en cours{dots}",
+            f"Recherche en cours{dots}",
             (card.left + 30, card.top + 132),
             theme.POLICE,
         )
         text(
             surface,
             fonts.ui(13),
-            "La recherche peut être annulée avec Retour ou Échap.",
+            "Retour ou Échap pour annuler.",
             (card.left + 30, card.top + 170),
             theme.TEXT_DIM,
-        )
-
-    def _draw_feedback(self, surface: pygame.Surface, pos: tuple[int, int]) -> None:
-        fonts = self.app.fonts
-        if self.error:
-            font, value, color = fonts.ui(14), self.error, theme.THIEF
-        elif self.notice:
-            font, value, color = fonts.ui(14), self.notice, theme.WARNING
-        else:
-            font = fonts.mono(12)
-            value = "Le serveur vérifie chaque coup : aucun client ne fixe l'état officiel."
-            color = theme.TEXT_DIM
-        self._draw_wrapped(
-            surface, font, value, pos, color, surface.get_width() - pos[0] - 24
         )
 
     def _draw_wrapped(

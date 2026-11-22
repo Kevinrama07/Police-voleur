@@ -94,7 +94,7 @@ class NetworkManager:
             self._discovery = None
             self.discovery_error = (
                 f"Découverte automatique indisponible ({exc}). "
-                "Communiquez l'adresse affichée et utilisez la connexion directe."
+                "Vérifiez le port UDP 50506 et le pare-feu Windows."
             )
             LOGGER.warning("découverte UDP indisponible : %s", exc)
         try:

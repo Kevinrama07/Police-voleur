@@ -44,6 +44,75 @@ except ImportError:  # pragma: no cover - repli si gfxdraw absent
 SUPERSAMPLE = 3
 LINE_WIDTH_BOARD = 2.7
 ARC_STEP_DEG = 1.6
+PAWN_SPRITE_MIN_SIZE = 28
+
+VERTEX_LABELS: dict[str, str] = {
+    "T": "Haut",
+    "EA2": "Arc HG",
+    "EALt": "Ell. HG",
+    "L": "Gauche",
+    "EALb": "Ell. BG",
+    "EA6": "Arc BG",
+    "B": "Bas",
+    "EA7": "Arc BD",
+    "EARb": "Ell. BD",
+    "R": "Droite",
+    "EARt": "Ell. HD",
+    "EA1": "Arc HD",
+    "J1": "J. haut",
+    "VCt": "V. haut",
+    "CENTER": "Centre",
+    "VCb": "V. bas",
+    "J2": "J. bas",
+    "HAL": "L. G ext",
+    "HCl": "L. G int",
+    "HCr": "L. D int",
+    "HAR": "L. D ext",
+}
+
+
+def vertex_label(vertex_id: str) -> str:
+    """Libellé lisible d'un sommet ; l'identifiant interne reste inchangé."""
+    return VERTEX_LABELS.get(vertex_id, vertex_id)
+
+
+PAWN_IMAGE_CANDIDATES: dict[Team, tuple[str, ...]] = {
+    Team.THIEF: ("assets/images/voleur.png", "assets/images/Voleur.png"),
+    Team.POLICE: ("assets/images/policier.png", "assets/images/Policier.png"),
+}
+
+
+def _resolve_asset(candidate: str) -> Path | None:
+    roots = (Path(__file__).resolve().parents[2], Path.cwd())
+    for root in roots:
+        path = root / candidate
+        if path.is_file():
+            return path
+    return None
+
+
+def load_pawn_sprite(team: Team, size: int) -> pygame.Surface | None:
+    """Charge et redimensionne le sprite d'un camp ; `None` si le PNG est absent."""
+    for candidate in PAWN_IMAGE_CANDIDATES[team]:
+        path = _resolve_asset(candidate)
+        if path is None:
+            continue
+        try:
+            image = pygame.image.load(str(path))
+            if pygame.display.get_init():
+                image = image.convert_alpha()
+        except pygame.error:
+            continue
+        bounds = image.get_bounding_rect()
+        if bounds.width and bounds.height:
+            image = image.subsurface(bounds).copy()
+        factor = min(size / image.get_width(), size / image.get_height())
+        dimensions = (
+            max(1, round(image.get_width() * factor)),
+            max(1, round(image.get_height() * factor)),
+        )
+        return pygame.transform.smoothscale(image, dimensions)
+    return None
 
 
 class BoardRenderer:
@@ -62,6 +131,10 @@ class BoardRenderer:
         self.fonts = fonts
         self.transform = fit_transform(area.width, area.height, margin=14.0)
         self.pawn_radius = max(9, int(self.transform.scale * 8.6))
+        sprite_size = max(PAWN_SPRITE_MIN_SIZE, round(self.pawn_radius * 2.8))
+        self._pawn_sprites = {
+            team: load_pawn_sprite(team, sprite_size) for team in Team
+        }
         self._static = self._render_static()
         self._image = self._load_reference(image_path)
         self._tween: MoveTween | None = None
@@ -264,7 +337,7 @@ class BoardRenderer:
             x += offset[0]
             y += offset[1]
             pygame.draw.circle(surface, theme.DEBUG_VERTEX, (round(x), round(y)), 2)
-            label = font.render(vertex, True, theme.DEBUG_VERTEX)
+            label = font.render(vertex_label(vertex), True, theme.DEBUG_VERTEX)
             surface.blit(label, (round(x) + 5, round(y) - 14))
 
     def _draw_cooldown(self, surface: pygame.Surface, ratio: float | None) -> None:
@@ -343,28 +416,37 @@ class BoardRenderer:
                 x, y = self.screen_pos(vertex)
             x += offset[0]
             y += offset[1]
+            sprite = self._pawn_sprites.get(key[0])
+            visual_radius = sprite.get_height() // 2 if sprite is not None else self.pawn_radius
             active = thinking is not None and key[0] is thinking
             if active:
-                ring = int(self.pawn_radius + 4 + 4 * pulse(0.7, 1.3 if key[0] is Team.THIEF else 0.0))
+                ring = int(visual_radius + 4 + 4 * pulse(0.7, 1.3 if key[0] is Team.THIEF else 0.0))
                 glow_alpha = int(70 + 60 * pulse(0.7, 2.0))
                 theme.alpha_disc(surface, (round(x), round(y)), ring + 6, (*color, glow_alpha))
                 pygame.draw.circle(surface, color, (round(x), round(y)), ring, 2)
             if vertex == selected_vertex and key[0] is Team.POLICE:
                 pygame.draw.circle(
-                    surface, theme.TEXT, (round(x), round(y)), self.pawn_radius + 5, 2
+                    surface, theme.TEXT, (round(x), round(y)), visual_radius + 5, 2
                 )
-            theme.alpha_disc(surface, (round(x) + 1, round(y) + 3), self.pawn_radius, (0, 0, 0, 110))
-            self._aa_circle(surface, x, y, self.pawn_radius, dark)
-            self._aa_circle(surface, x, y, self.pawn_radius - 2, color)
-            highlight = (min(255, color[0] + 70), min(255, color[1] + 70), min(255, color[2] + 70))
-            self._aa_circle(
-                surface,
-                x - self.pawn_radius * 0.28,
-                y - self.pawn_radius * 0.32,
-                max(2, self.pawn_radius // 4),
-                highlight,
-            )
-            self._aa_circle(surface, x, y, self.pawn_radius, theme.BG, filled=False)
+            theme.alpha_disc(surface, (round(x) + 1, round(y) + 3), visual_radius, (0, 0, 0, 110))
+            if sprite is None:
+                self._aa_circle(surface, x, y, self.pawn_radius, dark)
+                self._aa_circle(surface, x, y, self.pawn_radius - 2, color)
+                highlight = (
+                    min(255, color[0] + 70),
+                    min(255, color[1] + 70),
+                    min(255, color[2] + 70),
+                )
+                self._aa_circle(
+                    surface,
+                    x - self.pawn_radius * 0.28,
+                    y - self.pawn_radius * 0.32,
+                    max(2, self.pawn_radius // 4),
+                    highlight,
+                )
+                self._aa_circle(surface, x, y, self.pawn_radius, theme.BG, filled=False)
+            else:
+                surface.blit(sprite, sprite.get_rect(center=(round(x), round(y))))
 
     # ------------------------------------------------------------------ primitives
 

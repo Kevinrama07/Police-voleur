@@ -13,10 +13,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai.minimax import SearchConfig, SearchEngine
+from ai.contrat import Context, Stats
+from ai.minimax_police import choose_move as police_bot
+from ai.minimax_voleur import choose_move as thief_bot
+from core.constants import Team
 from core.constants import GameStatus
 from core.game_manager import GameManager
 from core.graph import build_default_graph
+from core.ruleset import DEFAULT_RULES
 
 
 def main() -> int:
@@ -28,9 +32,6 @@ def main() -> int:
     args = parser.parse_args()
 
     graph = build_default_graph()
-    engine = SearchEngine(graph)
-    config = SearchConfig(max_depth=args.depth, time_limit=args.time_limit)
-
     outcomes = {status: 0 for status in GameStatus}
     move_times: list[float] = []
     nodes: list[int] = []
@@ -40,12 +41,25 @@ def main() -> int:
     for game_index in range(args.games):
         manager = GameManager(graph, seed=args.seed + game_index)
         while not manager.is_over:
-            result = engine.search(manager.state, config, ply=manager.ply)
-            assert result.move is not None
-            move_times.append(result.elapsed)
-            nodes.append(result.nodes)
-            cutoffs.append(result.cutoffs)
-            manager.play(result.move)
+            stats = Stats()
+            deadline = None
+            if args.time_limit > 0:
+                deadline = time.perf_counter() + args.time_limit
+            ctx = Context(
+                rules=DEFAULT_RULES,
+                depth=max(1, args.depth),
+                repetition_limit=manager.config.repetition_limit,
+                history=manager.history,
+                deadline=deadline,
+                stats=stats,
+            )
+            bot = police_bot if manager.state.turn is Team.POLICE else thief_bot
+            started = time.perf_counter()
+            move = bot(graph, manager.state, manager.ply, ctx)
+            move_times.append(time.perf_counter() - started)
+            nodes.append(stats.nodes)
+            cutoffs.append(stats.cutoffs)
+            manager.play(move)
         outcomes[manager.status] += 1
         moves_per_game.append(manager.move_count)
 

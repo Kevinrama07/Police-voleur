@@ -11,9 +11,15 @@
 2. **Lecture intégrale** des `SKILL.md` des Skills potentiellement pertinents avant toute utilisation :
    `frontend-design` et `modern-web-design`.
 3. **Filtrage** : le projet est une application desktop **Python + Pygame + Socket TCP** (choix
-   technologique définitif). Aucun Skill spécialisé Python, Pygame, jeux ou réseau TCP n'est installé.
-4. **Aucun Skill n'a été utilisé comme substitut d'une bibliothèque du projet** : les Skills retenus
-   n'ont servi que de guides de conception visuelle (principes transférables), jamais de dépendances.
+   technologique définitif).
+4. **Recherche complémentaire** : `find-skills` puis
+   `npx --yes skills find python algorithm optimization` ont trouvé
+   `wshobson/agents@python-performance-optimization` (38,2 K installations), dont le
+   `SKILL.md` a été récupéré depuis
+   `https://raw.githubusercontent.com/wshobson/agents/main/plugins/python-development/skills/python-performance-optimization/SKILL.md`.
+5. **Aucun Skill n'a été utilisé comme substitut d'une bibliothèque du projet** : les Skills retenus
+   n'ont servi que de guides de conception visuelle et d'optimisation (principes transférables),
+   jamais de dépendances.
 
 ## 2. Skills examinés et décision
 
@@ -21,6 +27,7 @@
 |---|---|---|---|---|
 | **frontend-design** | `C:\Users\Kevin\.agents\skills\frontend-design\SKILL.md` | Direction artistique : intentionnalité, hiérarchie, typographie distinctive, éviter les esthétiques génériques | PHASE 4 (interface, menus, HUD) | **Retenu** (principes transposés à Pygame) |
 | **modern-web-design** | `C:\Users\Kevin\.config\opencode\skills\modern-web-design\SKILL.md` | Minimalisme maîtrisé, palette limitée, échelles d'espacement/typographie, micro-interactions, timings d'animation, contraste | PHASE 4 (design system du jeu) | **Retenu** (principes uniquement, aucune techno web) |
+| **python-performance-optimization** | `wshobson/agents@python-performance-optimization` ( distant ) | Profiler avant optimiser, `cProfile`/`timeit`, cache, réduction du travail par boucle | PHASE 1 (`ai/minimax_police.py`, `ai/exact_table.py`) | **Retenu** (méthodologie, aucune dépendance) |
 | **pixijs-2d** | `C:\Users\Kevin\.claude\skills\pixijs-2d\SKILL.md` | Rendu 2D/animation | — | **Non retenu** : moteur graphique imposé = Pygame |
 | **webapp-testing** | `C:\Users\Kevin\.claude\skills\webapp-testing\SKILL.md` | Validation d'applications web | — | **Non retenu** : tests imposés = Pytest |
 | **skill-creator** | `C:\Users\Kevin\.claude\skills\skill-creator\SKILL.md` | Création d'un Skill spécialisé | — | **Non utilisé** : aucune nécessité justifiée |
@@ -52,12 +59,25 @@
   animations au service de la lisibilité, jamais décoratives au détriment des règles.
 - **Contraste** : texte clair sur fond bleu nuit (ratio élevé), couleurs d'équipe distinctes
   (bleu police / rouge voleur) et signalétique de sélection non chromatique (formes) en complément.
-- **Panneau IA** (mode démo) traité comme un tableau de bord : hiérarchie claire, chiffres
+- **Panneau IA** (mode automatique) traité comme un tableau de bord : hiérarchie claire, chiffres
   alignés, libellés courts, densité contrôlée.
 
-## 4. Limites assumées
+## 4. Optimisation Python appliquée
 
-- Aucun Skill installé ne couvre **Python, Pygame, Socket TCP, Minimax/Alpha-Beta ou la théorie des
+Le Skill `python-performance-optimization` a conduit à :
+
+- profiler la construction de la table policière avec `cProfile` **avant** toute modification ;
+- mesurer `_build = 2,409 s`, `_attractor = 0,846 s`, 209 310 appels à `sorted` ;
+- remplacer `tuple(sorted(...))` par des comparaisons explicites ;
+- intégrer le calcul de `sid` et limiter `remaining` aux parents réels ;
+- lier `dict.setdefault` une seule fois dans la boucle chaude.
+
+Résultat : table initiale `~2 141 ms → ~1 630 ms`, cProfile total `3,514 s → 3,062 s`,
+comportement inchangé (10/10 victoires policières).
+
+## 5. Limites assumées
+
+- Aucun Skill installé ne couvre **Pygame, Socket TCP, Minimax/Alpha-Beta ou la théorie des
   graphes** : ces parties sont développées selon les bonnes pratiques d'ingénierie (architecture
   modulaire, typage, tests Pytest), sans prétendre qu'un Skill a été utilisé.
 - Les Skills web n'ont **jamais** introduit de technologie web dans le projet : Pygame reste le seul

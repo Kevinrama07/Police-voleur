@@ -13,6 +13,7 @@ from core.game_state import GameState, Move
 from core.graph import Graph
 from core.ruleset import RuleSet
 from multiplayer.network_manager import NetworkManager
+from stats import StatsStore
 
 LOGGER = logging.getLogger("police_voleur.network")
 
@@ -28,6 +29,7 @@ class NetworkController:
         settings: GameSettings,
         network: NetworkManager,
         start_payload: dict[str, Any],
+        stats_store: StatsStore | None = None,
     ) -> None:
         self.graph = graph
         self.settings = settings
@@ -58,6 +60,8 @@ class NetworkController:
         self.note = "Partie synchronisée avec le serveur."
         self.last_move: Move | None = None
         self._pending_animation: Move | None = None
+        self.stats_store = stats_store or StatsStore()
+        self._stats_recorded = False
         self._apply_start(start_payload)
 
     # ------------------------------------------------------------------ état exposé
@@ -128,9 +132,16 @@ class NetworkController:
 
     # ------------------------------------------------------------------ boucle
 
+    def _record_stats(self) -> None:
+        if self._stats_recorded or self.abandoned or not self.is_over:
+            return
+        self._stats_recorded = True
+        self.stats_store.record("network", self.status)
+
     def update(self, dt: float) -> None:
         for message in self.network.poll():
             self._handle(message)
+        self._record_stats()
         if self.network.peer_left and not self.abandoned:
             self.abandoned = True
             self.pending = False
@@ -190,6 +201,7 @@ class NetworkController:
         self.manager = GameManager(self.graph, self.config, state=state, seed=seed)
         self._total_ply = int(message.get("ply", 0))
         self._status_override = None
+        self._stats_recorded = False
         self.abandoned = False
         self.connection_lost = False
         self.pending = False
@@ -340,7 +352,4 @@ class NetworkController:
 
 
 def settings_to_rules(settings: GameSettings) -> RuleSet:
-    return RuleSet(
-        return_cooldown=settings.return_cooldown,
-        center_contestable=settings.center_contestable,
-    )
+    return settings.to_rules()

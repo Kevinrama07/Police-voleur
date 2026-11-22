@@ -9,6 +9,7 @@ from interface import theme
 from interface.app import App, Scene
 from interface.components.controls import Button
 from interface.theme import text
+from stats import StatsStore
 
 
 BLOCKS = [
@@ -35,11 +36,12 @@ BLOCKS = [
         ],
     ),
     (
-        "LES TROIS MODES",
+        "LES MODES",
         [
-            "Démonstration : deux IA s'affrontent, avec panneau de",
+            "Automatique : deux IA s'affrontent, avec panneau de",
             "visualisation (nœuds, coupures, temps) et arbre Minimax.",
             "Solo : jouez le voleur ou la police contre l'IA.",
+            "Manuel : deux joueurs sur le même écran.",
             "Multijoueur : deux machines sur le même réseau local,",
             "serveur autoritaire en Socket TCP, messages JSON.",
         ],
@@ -108,5 +110,7 @@ class AboutScreen(Scene):
                     theme.TEXT_MUTED,
                 )
 
+        stats_line = StatsStore().load().summary()
+        text(surface, self.app.fonts.mono(12), stats_line, (120, 666), theme.TEXT_DIM)
         text(surface, self.app.fonts.mono(12), f"v{APP_VERSION}", (1210, 716), theme.TEXT_DIM)
         self.button.draw(surface, self.app.fonts)

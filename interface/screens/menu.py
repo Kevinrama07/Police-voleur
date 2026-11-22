@@ -36,8 +36,9 @@ class MainMenu(Scene):
 
     def _build_buttons(self) -> list[Button]:
         specs = [
-            ("Démonstration", self._start_demo, True),
+            ("Automatique", self._start_auto, True),
             ("Solo", self._start_solo, False),
+            ("Manuel", self._start_manuel, False),
             ("Multijoueur", self._start_multiplayer, False),
             ("Paramètres", self._open_settings, False),
             ("À propos", self._open_about, False),
@@ -57,17 +58,28 @@ class MainMenu(Scene):
 
     # ------------------------------------------------------------------ actions
 
-    def _start_demo(self) -> None:
+    def _start_auto(self) -> None:
         from interface.screens.game import GameScreen
-        from modes.demo import DemoController
+        from match import MatchController, Mode
 
-        controller = DemoController(build_default_graph(), self.app.settings)
+        controller = MatchController(
+            build_default_graph(), self.app.settings, mode=Mode.AUTO
+        )
         self.app.go_to(lambda: GameScreen(self.app, controller))
 
     def _start_solo(self) -> None:
-        from interface.screens.setup import SoloSetup
+        from interface.screens.solo_setup import SoloSetup
 
         self.app.go_to(lambda: SoloSetup(self.app))
+
+    def _start_manuel(self) -> None:
+        from interface.screens.game import GameScreen
+        from match import MatchController, Mode
+
+        controller = MatchController(
+            build_default_graph(), self.app.settings, mode=Mode.MANUEL
+        )
+        self.app.go_to(lambda: GameScreen(self.app, controller))
 
     def _start_multiplayer(self) -> None:
         from interface.screens.network_setup import NetworkSetup
@@ -91,7 +103,7 @@ class MainMenu(Scene):
             button.handle(event)
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_RETURN:
-                self._start_demo()
+                self._start_auto()
             elif event.key == pygame.K_ESCAPE:
                 self.app.quit()
 

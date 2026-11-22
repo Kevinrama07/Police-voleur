@@ -6,14 +6,16 @@ from types import SimpleNamespace
 
 import pygame
 
-from config import GameSettings, WINDOW_SIZE
+from config import Difficulty, GameSettings, WINDOW_SIZE
 from core.constants import Team
 from core.game_manager import GameManager
 from core.graph import build_default_graph
+from interface.board import VERTEX_LABELS, BoardRenderer, load_pawn_sprite, vertex_label
 from interface.screens import game as game_module
 from interface.screens.game import GameScreen
 from interface.screens.network_setup import NetworkSetup
 from interface.screens.settings import SettingsScreen
+from interface.screens.solo_setup import SoloSetup
 from interface.theme import Fonts
 from modes.multiplayer import NetworkController
 
@@ -21,6 +23,29 @@ from modes.multiplayer import NetworkController
 def _app() -> SimpleNamespace:
     pygame.font.init()
     return SimpleNamespace(settings=GameSettings(), fonts=Fonts(), go_to=lambda _factory: None)
+
+
+def test_intersections_have_readable_french_labels() -> None:
+    assert set(VERTEX_LABELS) == set(build_default_graph())
+    assert vertex_label("CENTER") == "Centre"
+    assert vertex_label("EA1") == "Arc HD"
+    assert vertex_label("INCONNU") == "INCONNU"
+
+
+def test_les_pions_utilisent_les_images_du_dossier_assets() -> None:
+    pygame.font.init()
+    thief = load_pawn_sprite(Team.THIEF, 30)
+    police = load_pawn_sprite(Team.POLICE, 30)
+    assert thief is not None
+    assert police is not None
+    assert max(thief.get_size()) <= 30
+    assert max(police.get_size()) <= 30
+
+    renderer = BoardRenderer(
+        build_default_graph(), pygame.Rect(0, 0, 712, 740), Fonts()
+    )
+    assert max(renderer._pawn_sprites[Team.THIEF].get_size()) >= 28
+    assert max(renderer._pawn_sprites[Team.POLICE].get_size()) >= 28
 
 
 def test_settings_sliders_leave_space_for_labels() -> None:
@@ -44,16 +69,37 @@ def test_multiplayer_setup_has_host_join_and_no_address_inputs() -> None:
             "Rejoindre",
         )
         assert not any(
-            hasattr(screen, name) for name in ("host_port", "join_ip", "join_port")
+            hasattr(screen, name)
+            for name in (
+                "host_port",
+                "join_ip",
+                "join_port",
+                "address_input",
+                "connect_button",
+            )
         )
         assert not screen.host_button.rect.colliderect(screen.join_button.rect)
-        assert screen.address_input.rect.colliderect(
-            pygame.Rect(0, 0, *WINDOW_SIZE)
-        )
-        assert not screen.address_input.rect.colliderect(screen.connect_button.rect)
         screen.draw(pygame.Surface(WINDOW_SIZE))
     finally:
         screen.network.close()
+
+
+def test_settings_difficulty_button_cycles_presets() -> None:
+    app = _app()
+    screen = SettingsScreen(app)
+    assert screen.difficulty_button.label == "Difficulté : Normal"
+    screen.difficulty_button.on_click()
+    assert app.settings.difficulty is Difficulty.DIFFICILE
+    assert screen.difficulty_button.rect.left > 900
+
+
+def test_solo_setup_has_two_distinct_camps() -> None:
+    screen = SoloSetup(_app())
+    thief, police, back = screen.buttons
+    assert (thief.label, police.label) == ("JOUER LE VOLEUR", "JOUER LA POLICE")
+    assert not thief.rect.colliderect(police.rect)
+    assert not back.rect.colliderect(thief.rect)
+    screen.draw(pygame.Surface(WINDOW_SIZE))
 
 
 def test_multiplayer_game_hud_fits_long_names_and_messages(

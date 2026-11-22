@@ -1,5 +1,6 @@
-"""Modes de jeu : démonstration, solo et multijoueur.
+"""Modes de jeu : moteur local (`match.py`) et réseau (`net.py`)."""
 
-Tous partagent le même moteur (`core`) et la même IA (`ai`) : seuls le contrôle
-des camps et le transport réseau changent.
-"""
+from modes.ai_runner import AsyncSearch
+from modes.multiplayer import NetworkController
+
+__all__ = ["AsyncSearch", "NetworkController"]

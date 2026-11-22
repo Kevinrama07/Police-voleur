@@ -33,6 +33,10 @@ rendu n'est stockée dans la logique du jeu.
 | `EA1`, `EA2`, `EA6`, `EA7` | Arcs pétales ∩ ellipse |
 | `EALt`, `EALb`, `EARt`, `EARb` | Grands arcs ∩ ellipse (haut / bas, gauche / droite) |
 
+Ces identifiants techniques restent ceux du moteur. En mode débogage (`D`), l'interface
+affiche des libellés français (`Centre`, `Haut`, `Arc HD`, …) définis dans
+`interface/board.py:VERTEX_LABELS` : aucun coup, état ou message réseau n'est modifié.
+
 ## 3. Sommets (table complète)
 
 | Id | x | y | Type | Degré | Voisins |

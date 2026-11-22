@@ -1,59 +1,53 @@
-"""Contrôleur commun aux modes hors réseau : tours, IA asynchrone, sélection.
-
-Le mode Démo utilise `human_team = None` (deux IA) ; le mode Solo fournit le camp
-du joueur humain. Les règles et l'IA sont exactement celles du moteur commun.
-"""
+"""Moteur de match unique : modes AUTO et MANUEL, IA asynchrone et animations."""
 
 from __future__ import annotations
 
 import random
+import time
+from enum import Enum
 
-from ai.minimax import SearchConfig, SearchEngine, SearchResult
-from ai.police_minimax import PoliceMinimaxEngine
+from ai.contrat import Bot, Context, Result, Stats
+from ai.minimax_police import choose_move as police_bot
+from ai.minimax_voleur import choose_move as thief_bot
 from config import DEMO_STEP_DELAY_SECONDS, GameSettings
 from core.constants import GameStatus, Team
-from core.game_manager import GameConfig, GameManager
-from core.game_state import Move
+from core.game_manager import GameManager
+from core.game_state import GameState, Move
 from core.graph import Graph
-from core.ruleset import RuleSet
 from modes.ai_runner import AsyncSearch
+from stats import StatsStore
 
 PREVIEW_SECONDS = 0.34
 
 
-class MatchController:
-    """Pilote une partie locale : humain éventuel + IA, animations et prévisualisation."""
+class Mode(str, Enum):
+    """Deux façons de jouer : bots partout, ou deux humains sur le même écran."""
 
-    kind = "match"
+    AUTO = "auto"
+    MANUEL = "manuel"
+
+
+class MatchController:
+    """Pilote une partie : tours, pilotes IA/humains, prévisualisation et animation."""
 
     def __init__(
         self,
         graph: Graph,
         settings: GameSettings,
         *,
+        mode: Mode = Mode.AUTO,
         human_team: Team | None = None,
+        stats_store: StatsStore | None = None,
     ) -> None:
         self.graph = graph
         self.settings = settings
-        self.human_team = human_team
-        self.rules = RuleSet(
-            return_cooldown=settings.return_cooldown,
-            center_contestable=settings.center_contestable,
-        )
-        self.config = SearchConfig(
-            max_depth=settings.ai_depth,
-            time_limit=settings.ai_time_limit,
-            record_tree=True,
-            tree_depth=2,
-            rules=self.rules,
-        )
-        self.engine = SearchEngine(graph)
-        self.police_engine = PoliceMinimaxEngine(graph, self.config)
+        self.rules = settings.to_rules()
+        self.game_config = settings.to_game_config()
         self.search = AsyncSearch()
         self.speed = max(0.25, settings.demo_speed)
         self.paused = False
         self.thinking: Team | None = None
-        self.last_result: SearchResult | None = None
+        self.last_result: Result | None = None
         self.preview: Move | None = None
         self.selected_police: int | None = None
         self.selected_vertex: str | None = None
@@ -61,19 +55,41 @@ class MatchController:
         self._phase = "idle"
         self._timer = 0.0
         self._stepping = False
+        self.human_team = human_team
+        self.human_teams = self._human_teams(mode, human_team)
+        self.mode = Mode.MANUEL if human_team is not None else mode
+        self.kind = "demo" if self.mode is Mode.AUTO else "solo"
+        if human_team is not None:
+            self.stats_mode = "solo"
+        elif mode is Mode.AUTO:
+            self.stats_mode = "auto"
+        else:
+            self.stats_mode = "manuel"
+        self.stats_store = stats_store or StatsStore()
+        self._stats_recorded = False
         self._seed = (
             int(settings.seed) if settings.seed is not None else random.randrange(100_000)
         )
         self.manager = self._new_manager()
 
-    # ------------------------------------------------------------------ état exposé
+    @staticmethod
+    def _human_teams(mode: Mode, human_team: Team | None) -> frozenset[Team]:
+        if human_team is not None:
+            return frozenset((human_team,))
+        if mode is Mode.MANUEL:
+            return frozenset(Team)
+        return frozenset()
 
     @property
     def mode_name(self) -> str:
-        return "Partie"
+        if len(self.human_teams) == 2:
+            return "Manuel"
+        if self.human_teams:
+            return "Solo"
+        return "Automatique"
 
     @property
-    def state(self):
+    def state(self) -> GameState:
         return self.manager.state
 
     @property
@@ -101,18 +117,16 @@ class MatchController:
     @property
     def can_human_play(self) -> bool:
         return (
-            self.human_team is not None
+            self.state.turn in self.human_teams
             and not self.is_over
-            and self.state.turn is self.human_team
             and not self.search.busy
             and self._pending_animation is None
         )
 
     def legal_targets(self) -> set[str]:
-        """Sommets cliquables pour l'humain (vide pour l'IA ou hors tour)."""
         if not self.can_human_play:
             return set()
-        if self.human_team is Team.THIEF:
+        if self.state.turn is Team.THIEF:
             return {move.dst for move in self.manager.legal_moves()}
         if self.selected_police is None:
             return set()
@@ -126,15 +140,8 @@ class MatchController:
         move, self._pending_animation = self._pending_animation, None
         return move
 
-    # ------------------------------------------------------------------ partie
-
     def _new_manager(self) -> GameManager:
-        config = GameConfig(
-            max_moves=self.settings.max_moves,
-            repetition_limit=self.settings.repetition_limit,
-            rules=self.rules,
-        )
-        return GameManager(self.graph, config=config, seed=self._seed)
+        return GameManager(self.graph, config=self.game_config, seed=self._seed)
 
     def restart(self) -> None:
         self.search.cancel()
@@ -161,7 +168,6 @@ class MatchController:
         self.set_paused(not self.paused)
 
     def step_once(self) -> None:
-        """Avance d'un coup (mode démo) puis se remet en pause."""
         if self.is_over:
             return
         self._stepping = True
@@ -177,14 +183,31 @@ class MatchController:
         return max(0.1, PREVIEW_SECONDS / self.speed)
 
     def _is_ai_turn(self) -> bool:
-        return self.human_team is None or self.state.turn is not self.human_team
+        return self.state.turn not in self.human_teams
 
-    # ------------------------------------------------------------------ mise à jour
+    def _context(self) -> Context:
+        deadline = None
+        if self.settings.ai_time_limit > 0:
+            deadline = time.perf_counter() + self.settings.ai_time_limit
+        return Context(
+            rules=self.rules,
+            depth=max(1, self.settings.ai_depth),
+            repetition_limit=self.settings.repetition_limit,
+            history=self.manager.history,
+            deadline=deadline,
+            stats=Stats(),
+            collect_tree=True,
+        )
+
+    def _record_stats(self) -> None:
+        if self._stats_recorded or not self.is_over:
+            return
+        self._stats_recorded = True
+        self.stats_store.record(self.stats_mode, self.status)
 
     def update(self, dt: float) -> None:
-        if self.is_over:
-            return
-        if not self._is_ai_turn():
+        self._record_stats()
+        if self.is_over or not self._is_ai_turn():
             self._phase = "idle"
             return
         if self.paused and not self._stepping:
@@ -216,15 +239,8 @@ class MatchController:
             return
         self.thinking = self.state.turn
         self.preview = None
-        if self.state.turn is Team.POLICE:
-            self.police_engine.set_context(
-                self.manager.history, self.settings.repetition_limit
-            )
-            self.search.start(
-                self.police_engine, self.state, self.config, self.manager.ply
-            )
-        else:
-            self.search.start(self.engine, self.state, self.config, self.manager.ply)
+        bot: Bot = police_bot if self.state.turn is Team.POLICE else thief_bot
+        self.search.start(bot, self.graph, self.state, self._context(), self.manager.ply)
         self._phase = "search"
         self._timer = 0.0
 
@@ -239,15 +255,14 @@ class MatchController:
             self._stepping = False
             self.paused = True
 
-    # ------------------------------------------------------------------ interactions
-
     def handle_board_click(self, vertex: str) -> bool:
-        """Sélection / déplacement humain ; retourne True si l'état a changé."""
         if not self.can_human_play:
             return False
-        if self.human_team is Team.THIEF:
-            moves = self.manager.legal_moves()
-            chosen = next((move for move in moves if move.dst == vertex), None)
+        if self.state.turn is Team.THIEF:
+            chosen = next(
+                (move for move in self.manager.legal_moves() if move.dst == vertex),
+                None,
+            )
             if chosen is None:
                 self.selected_vertex = None if vertex != self.state.thief else vertex
                 return False
@@ -258,11 +273,10 @@ class MatchController:
             return False
         if self.selected_police is None:
             return False
-        moves = self.manager.legal_moves()
         chosen = next(
             (
                 move
-                for move in moves
+                for move in self.manager.legal_moves()
                 if move.police_index == self.selected_police and move.dst == vertex
             ),
             None,
@@ -283,8 +297,6 @@ class MatchController:
         self._timer = 0.0
         return True
 
-    # ------------------------------------------------------------------ résumé
-
     def status_headline(self) -> str:
         if self.status is GameStatus.POLICE_WIN:
             return "Les trois unités ont fermé toutes les issues."
@@ -304,3 +316,6 @@ class MatchController:
                 return "Limite de coups atteinte sans vainqueur."
             return "Position répétée trois fois : nulle par répétition."
         return ""
+
+
+__all__ = ["MatchController", "Mode", "PREVIEW_SECONDS"]

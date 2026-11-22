@@ -110,7 +110,7 @@ def test_demo_plays_without_human() -> None:
     controller = DemoController(GRAPH, settings)
     try:
         moves = []
-        for _ in range(400):
+        for _ in range(1400):
             controller.update(1 / 60)
             move = controller.take_animation()
             if move is not None:

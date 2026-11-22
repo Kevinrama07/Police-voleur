@@ -1,14 +1,4 @@
-"""Minimax avec élagage Alpha-Beta, table de transposition et approfondissement itératif.
-
-Conventions :
-- la POLICE est le maximizer, le VOLEUR le minimizer ;
-- `apply_move` bascule toujours le tour, donc la profondeur décroît d'un coup ;
-- les scores terminaux (±10 000) sont fixés et prioritaires sur l'heuristique ;
-- la recherche ignore les nulles par répétition (pas d'historique dans l'arbre) :
-  le gestionnaire de partie reste seul juge des nulles ;
-- `ply` (demi-coups déjà joués) est propagé pour appliquer le cooldown de retour
-  au centre (`RuleSet`) ; la table de transposition inclut ce cooldown relatif.
-"""
+"""Minimax court et fort : alpha-bêta, transposition, itératif, évaluation exacte."""
 
 from __future__ import annotations
 
@@ -17,47 +7,31 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ai.evaluation import evaluate
-from core.constants import (
-    CENTER,
-    POLICE_WIN_SCORE,
-    THIEF_WIN_SCORE,
-    Team,
-)
+from core.constants import CENTER, POLICE_WIN_SCORE, THIEF_WIN_SCORE, Team
 from core.game_rules import apply_move, legal_moves, thief_is_blocked
 from core.game_state import GameState, Move
 from core.graph import Graph
 from core.ruleset import DEFAULT_RULES, RuleSet
 
-INFINITY = 1_000_000
-
+INF = 1_000_000
+EXACT, LOWER, UPPER = 0, 1, 2
 Evaluator = Callable[[Graph, GameState, int, RuleSet], int]
 
 
-def _score(
-    graph: Graph,
-    state: GameState,
-    ply: int,
-    rules: RuleSet,
-    evaluator: Evaluator | None,
-) -> int:
-    if evaluator is None:
-        return evaluate(graph, state, ply, rules)
-    return evaluator(graph, state, ply, rules)
-
-
-EXACT = 0
-LOWER = 1
-UPPER = 2
-
-
 class SearchTimeout(RuntimeError):
-    """Limite de temps atteinte pendant la recherche."""
+    """Limite de temps atteinte."""
+
+
+def exact_evaluation(g: Graph, s: GameState, ply: int, rules: RuleSet) -> int:
+    """Valeur réelle du jeu ; l'heuristique ne départage que les égalités."""
+    from ai.police_solver import solved_game
+
+    solver = solved_game(g, rules)
+    return solver.map_score(solver.value(s, ply), evaluate(g, s, ply, rules))
 
 
 @dataclass(frozen=True, slots=True)
 class SearchConfig:
-    """Paramètres de recherche ; `time_limit=None` désactive la limite."""
-
     max_depth: int = 4
     time_limit: float | None = None
     alpha_beta: bool = True
@@ -71,23 +45,19 @@ class SearchConfig:
 
 @dataclass(slots=True)
 class SearchNode:
-    """Nœud réellement exploré (visualisation pédagogique de l'arbre Minimax)."""
-
     state: GameState
     move: Move | None
     depth: int
     maximizing: bool
     score: int = 0
     cutoff: bool = False
-    alpha: int = -INFINITY
-    beta: int = INFINITY
-    children: list["SearchNode"] = field(default_factory=list)
+    alpha: int = -INF
+    beta: int = INF
+    children: list[SearchNode] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
 class MoveEvaluation:
-    """Score exact d'un coup racine (panneau de démonstration)."""
-
     move: Move
     score: int
 
@@ -107,7 +77,7 @@ class SearchResult:
 
 
 @dataclass(slots=True)
-class _TranspositionEntry:
+class _Entry:
     depth: int
     score: int
     flag: int
@@ -115,332 +85,142 @@ class _TranspositionEntry:
 
 
 @dataclass(slots=True)
-class _Context:
-    graph: Graph
-    config: SearchConfig
+class _Ctx:
+    g: Graph
+    cfg: SearchConfig
     deadline: float | None
-    transposition: dict[tuple, _TranspositionEntry]
+    tt: dict
     nodes: int = 0
     cutoffs: int = 0
-    tt_hits: int = 0
-    _counter: int = 0
+    hits: int = 0
+    ticks: int = 0
+    root_ply: int = 0
+    scores: list = field(default_factory=list)
 
-    def check_time(self) -> None:
-        self._counter += 1
-        if (
-            self.deadline is not None
-            and self._counter & 0x3FF == 0
-            and time.perf_counter() >= self.deadline
-        ):
+    def check(self) -> None:
+        self.ticks += 1
+        if (self.deadline and not self.ticks & 1023
+                and time.perf_counter() >= self.deadline):
             raise SearchTimeout
 
 
 class SearchEngine:
-    """Moteur de recherche réutilisable ; précalcule les distances statiques."""
+    """Un seul minimax : POLICE maximise, VOLEUR minimise."""
 
     def __init__(self, graph: Graph) -> None:
         self.graph = graph
-        self._static = {vertex: graph.bfs_distances(vertex) for vertex in graph}
+        self._dist = {v: graph.bfs_distances(v) for v in graph}
 
     def order_moves(self, state: GameState, moves: list[Move]) -> list[Move]:
-        """Ordonne les coups pour améliorer l'élagage.
-
-        Policiers : d'abord les coups qui rapprochent un policier du voleur.
-        Voleur : d'abord les coups qui rapprochent du centre.
-        """
-        distances = self._static
-        if state.turn is Team.THIEF:
-            return sorted(
-                moves,
-                key=lambda m: (distances[m.dst].get(CENTER, INFINITY), m.dst),
-            )
-        return sorted(
-            moves,
-            key=lambda m: (distances[m.dst].get(state.thief, INFINITY), m.dst),
-        )
-
-    def value_full(self, state: GameState, depth: int, ply: int = 0) -> tuple[int, int]:
-        """Valeur Minimax pure (aucun élagage, aucune table, aucun ordonnancement).
-
-        Sert de référence aux tests d'équivalence Alpha-Beta.
-        """
-        ctx = _Context(
-            graph=self.graph,
-            config=SearchConfig(
-                max_depth=depth,
-                alpha_beta=False,
-                use_transposition=False,
-                order_moves=False,
-            ),
-            deadline=None,
-            transposition={},
-        )
-        value = self._minimax(
-            ctx,
-            state,
-            depth,
-            -INFINITY,
-            INFINITY,
-            record_left=-1,
-            prune=False,
-            ply=ply,
-        )[0]
-        return value, ctx.nodes
-
-    def search(
-        self,
-        state: GameState,
-        config: SearchConfig | None = None,
-        ply: int = 0,
-    ) -> SearchResult:
-        """Approfondissement itératif avec limite de temps optionnelle."""
-        cfg = config or SearchConfig()
-        root_moves = legal_moves(self.graph, state, cfg.rules, ply)
-        start = time.perf_counter()
-        if not root_moves:
-            return SearchResult(
-                move=None,
-                score=_score(self.graph, state, ply, cfg.rules, cfg.evaluator),
-                depth=0,
-                completed=True,
-                nodes=0,
-                cutoffs=0,
-                tt_hits=0,
-                elapsed=time.perf_counter() - start,
-            )
-        ctx = _Context(
-            graph=self.graph,
-            config=cfg,
-            deadline=(start + cfg.time_limit) if cfg.time_limit else None,
-            transposition={},
-        )
-        ordered_root = self.order_moves(state, root_moves) if cfg.order_moves else root_moves
-
-        best_move: Move = ordered_root[0]
-        best_score = _score(self.graph, state, ply, cfg.rules, cfg.evaluator)
-        best_depth = 0
-        root_scores: tuple[MoveEvaluation, ...] = ()
-        best_tree: SearchNode | None = None
-        completed = False
-
-        for depth in range(1, max(1, cfg.max_depth) + 1):
-            try:
-                move, score, scores, tree = self._search_root(
-                    ctx, state, depth, ordered_root, ply
-                )
-            except SearchTimeout:
-                break
-            best_move, best_score, best_depth = move, score, depth
-            root_scores = tuple(scores)
-            best_tree = tree
-            completed = depth >= cfg.max_depth
-
-        return SearchResult(
-            move=best_move,
-            score=best_score,
-            depth=best_depth,
-            completed=completed,
-            nodes=ctx.nodes,
-            cutoffs=ctx.cutoffs,
-            tt_hits=ctx.tt_hits,
-            elapsed=time.perf_counter() - start,
-            root_scores=root_scores,
-            tree=best_tree,
-        )
-
-    # ------------------------------------------------------------------ internals
+        target = CENTER if state.turn is Team.THIEF else state.thief
+        dist = self._dist
+        return sorted(moves, key=lambda m: (dist[m.dst].get(target, INF), m.dst))
 
     @staticmethod
-    def _tt_key(state: GameState, ply: int, rules: RuleSet) -> tuple:
-        """Clé de transposition : la position + l'état du cooldown (écrêté)."""
-        return state.position_key() + (min(ply, max(0, rules.return_cooldown)),)
+    def _ev(ctx: _Ctx, state: GameState, ply: int) -> int:
+        fn = ctx.cfg.evaluator or exact_evaluation
+        return fn(ctx.g, state, ply, ctx.cfg.rules)
 
-    def _search_root(
-        self,
-        ctx: _Context,
-        state: GameState,
-        depth: int,
-        ordered_root: list[Move],
-        ply: int,
-    ) -> tuple[Move, int, list[MoveEvaluation], SearchNode | None]:
-        maximizing = state.turn is Team.POLICE
-        record_left = ctx.config.tree_depth if ctx.config.record_tree else -1
-        rules = ctx.config.rules
-        root_node = (
-            SearchNode(
-                state=state,
-                move=None,
-                depth=depth,
-                maximizing=maximizing,
-            )
-            if record_left >= 0
-            else None
-        )
-        best_move = ordered_root[0]
-        best_score = -INFINITY if maximizing else INFINITY
-        scores: list[MoveEvaluation] = []
+    def value_full(self, state: GameState, depth: int, ply: int = 0) -> tuple[int, int]:
+        ctx = _Ctx(self.graph, SearchConfig(max_depth=depth, alpha_beta=False,
+                   use_transposition=False, order_moves=False), None, {})
+        return self._ab(ctx, state, depth, ply, -INF, INF, -1)[0], ctx.nodes
 
-        for move in ordered_root:
-            ctx.check_time()
-            child_ply = ply + 1
-            child_state = apply_move(ctx.graph, state, move, rules, ply)
-            terminal = self._terminal_value(move, child_state, child_ply, rules)
-            child_node = None
-            if terminal is not None:
-                value = terminal
-                if root_node is not None:
-                    child_node = SearchNode(
-                        state=child_state,
-                        move=move,
-                        depth=depth - 1,
-                        maximizing=not maximizing,
-                        score=value,
-                    )
-            else:
-                value, child_node = self._minimax(
-                    ctx,
-                    child_state,
-                    depth - 1,
-                    -INFINITY,
-                    INFINITY,
-                    record_left=record_left - 1,
-                    prune=ctx.config.alpha_beta,
-                    ply=child_ply,
-                    node_move=move,
-                    node_depth=depth - 1,
-                    node_maximizing=not maximizing,
-                )
-            scores.append(MoveEvaluation(move, value))
-            if root_node is not None and child_node is not None:
-                root_node.children.append(child_node)
-            if maximizing:
-                if value > best_score:
-                    best_score, best_move = value, move
-            else:
-                if value < best_score:
-                    best_score, best_move = value, move
-        if root_node is not None:
-            root_node.score = best_score
-            root_node.alpha = best_score
-        return best_move, int(best_score), scores, root_node
+    def search(self, state, config=None, ply=0) -> SearchResult:
+        cfg = config or SearchConfig()
+        start = time.perf_counter()
+        ctx = _Ctx(self.graph, cfg, start + cfg.time_limit if cfg.time_limit else None,
+                   {}, root_ply=ply)
+        root = legal_moves(self.graph, state, cfg.rules, ply)
+        if not root:
+            return SearchResult(None, self._ev(ctx, state, ply), 0, True,
+                                0, 0, 0, time.perf_counter() - start)
+        if cfg.order_moves:
+            root = self.order_moves(state, root)
+        move, score, depth_done, scores, tree = root[0], 0, 0, (), None
+        for depth in range(1, max(1, cfg.max_depth) + 1):
+            ctx.scores = []
+            try:
+                _, tree = self._ab(ctx, state, depth, ply, -INF, INF,
+                                   cfg.tree_depth if cfg.record_tree else -1)
+            except SearchTimeout:
+                break
+            if not ctx.scores:
+                continue
+            scores = tuple(ctx.scores)
+            best = (max if state.turn is Team.POLICE else min)(scores,
+                                                              key=lambda e: e.score)
+            move, score, depth_done = best.move, best.score, depth
+        return SearchResult(move, score, depth_done, depth_done >= cfg.max_depth,
+                            ctx.nodes, ctx.cutoffs, ctx.hits,
+                            time.perf_counter() - start, scores, tree)
 
-    def _terminal_value(
-        self,
-        move: Move,
-        child_state: GameState,
-        child_ply: int,
-        rules: RuleSet,
-    ) -> int | None:
+    def _terminal(self, move: Move, child: GameState, ply: int, rules: RuleSet):
         if move.team is Team.THIEF and move.dst == CENTER:
             return THIEF_WIN_SCORE
-        if thief_is_blocked(self.graph, child_state, rules, child_ply):
+        if thief_is_blocked(self.graph, child, rules, ply):
             return POLICE_WIN_SCORE
         return None
 
-    def _minimax(
-        self,
-        ctx: _Context,
-        state: GameState,
-        depth: int,
-        alpha: int,
-        beta: int,
-        record_left: int,
-        prune: bool,
-        ply: int,
-        node_move: Move | None = None,
-        node_depth: int | None = None,
-        node_maximizing: bool | None = None,
-    ) -> tuple[int, SearchNode | None]:
+    def _ab(self, ctx, state, depth, ply, alpha, beta, record,
+            node_move=None, node_depth=None, node_max=None):
         ctx.nodes += 1
-        ctx.check_time()
-
-        maximizing = state.turn is Team.POLICE
-        node: SearchNode | None = None
-        if record_left >= 0:
-            node = SearchNode(
-                state=state,
-                move=node_move,
-                depth=depth if node_depth is None else node_depth,
-                maximizing=maximizing if node_maximizing is None else node_maximizing,
-            )
-
+        ctx.check()
+        cfg = ctx.cfg
+        police = state.turn is Team.POLICE
+        root = ply == ctx.root_ply
+        node = (SearchNode(state, node_move, depth if node_depth is None else node_depth,
+                           police if node_max is None else node_max)
+                if record >= 0 else None)
         if depth <= 0:
-            value = _score(ctx.graph, state, ply, ctx.config.rules, ctx.config.evaluator)
+            value = self._ev(ctx, state, ply)
             if node is not None:
                 node.score = value
             return value, node
 
-        key = self._tt_key(state, ply, ctx.config.rules)
-        if ctx.config.use_transposition:
-            entry = ctx.transposition.get(key)
+        key = state.position_key() + (min(ply, max(0, cfg.rules.return_cooldown)),)
+        if cfg.use_transposition and not root:
+            entry = ctx.tt.get(key)
             if entry is not None and entry.depth >= depth:
-                ctx.tt_hits += 1
+                ctx.hits += 1
                 if entry.flag == EXACT:
-                    if node is not None:
-                        node.score = entry.score
                     return entry.score, node
                 if entry.flag == LOWER:
                     alpha = max(alpha, entry.score)
                 else:
                     beta = min(beta, entry.score)
                 if alpha >= beta:
-                    if node is not None:
-                        node.score = entry.score
                     return entry.score, node
 
-        moves = legal_moves(ctx.graph, state, ctx.config.rules, ply)
+        moves = legal_moves(ctx.g, state, cfg.rules, ply)
         if not moves:
-            value = (
-                POLICE_WIN_SCORE
-                if state.turn is Team.THIEF
-                else _score(ctx.graph, state, ply, ctx.config.rules, ctx.config.evaluator)
-            )
+            value = POLICE_WIN_SCORE if not police else self._ev(ctx, state, ply)
             if node is not None:
                 node.score = value
             return value, node
-
-        if ctx.config.order_moves:
+        if cfg.order_moves:
             moves = self.order_moves(state, moves)
 
-        original_alpha, original_beta = alpha, beta
-        best = -INFINITY if maximizing else INFINITY
-        best_move: Move | None = None
-
+        old_alpha, old_beta = alpha, beta
+        best = -INF if police else INF
+        best_move = None
         for move in moves:
-            child_ply = ply + 1
-            child_state = apply_move(ctx.graph, state, move, ctx.config.rules, ply)
-            terminal = self._terminal_value(
-                move, child_state, child_ply, ctx.config.rules
-            )
-            child_node: SearchNode | None = None
+            child = apply_move(ctx.g, state, move, cfg.rules, ply)
+            terminal = self._terminal(move, child, ply + 1, cfg.rules)
             if terminal is not None:
-                value = terminal
-                if record_left >= 1:
-                    child_node = SearchNode(
-                        state=child_state,
-                        move=move,
-                        depth=depth - 1,
-                        maximizing=not maximizing,
-                        score=value,
-                    )
-            else:
-                value, child_node = self._minimax(
-                    ctx,
-                    child_state,
-                    depth - 1,
-                    alpha,
-                    beta,
-                    record_left=record_left - 1,
-                    prune=prune,
-                    ply=child_ply,
-                    node_move=move,
-                    node_depth=depth - 1,
-                    node_maximizing=not maximizing,
+                value, child_node = terminal, (
+                    SearchNode(child, move, depth - 1, not police, score=terminal)
+                    if record >= 1 else None
                 )
+            else:
+                value, child_node = self._ab(ctx, child, depth - 1, ply + 1,
+                                             alpha, beta, record - 1,
+                                             move, depth - 1, not police)
             if node is not None and child_node is not None:
                 node.children.append(child_node)
-
-            if maximizing:
+            if root:
+                ctx.scores.append(MoveEvaluation(move, value))
+            if police:
                 if value > best:
                     best, best_move = value, move
                 alpha = max(alpha, best)
@@ -448,34 +228,19 @@ class SearchEngine:
                 if value < best:
                     best, best_move = value, move
                 beta = min(beta, best)
-
-            if prune and alpha >= beta:
+            if cfg.alpha_beta and not root and alpha >= beta:
                 ctx.cutoffs += 1
                 if node is not None:
                     node.cutoff = True
                 break
-
-        if ctx.config.use_transposition:
-            flag = EXACT
-            if best <= original_alpha:
-                flag = UPPER
-            elif best >= original_beta:
-                flag = LOWER
-            existing = ctx.transposition.get(key)
-            if existing is None or existing.depth <= depth:
-                ctx.transposition[key] = _TranspositionEntry(depth, best, flag, best_move)
-
+        if cfg.use_transposition and not root:
+            flag = EXACT if old_alpha < best < old_beta else (
+                UPPER if best <= old_alpha else LOWER)
+            ctx.tt[key] = _Entry(depth, best, flag, best_move)
         if node is not None:
-            node.score = int(best)
-            node.alpha, node.beta = original_alpha, original_beta
+            node.score, node.alpha, node.beta = int(best), old_alpha, old_beta
         return int(best), node
 
 
-def choose_move(
-    graph: Graph,
-    state: GameState,
-    config: SearchConfig | None = None,
-    ply: int = 0,
-) -> SearchResult:
-    """Raccourci : crée un moteur, cherche, retourne le résultat complet."""
+def choose_move(graph, state, config=None, ply=0) -> SearchResult:
     return SearchEngine(graph).search(state, config, ply)

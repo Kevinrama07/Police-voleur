@@ -25,6 +25,7 @@ L'hôte démarre un serveur embarqué puis s'y connecte comme un client ordinair
 | `multiplayer/client.py` | `GameClient` : connexion, réception continue, envoi sérialisé. |
 | `multiplayer/network_manager.py` | Façade UI : hébergement/découverte/connexion, file de messages, roster, rôle local. |
 | `modes/multiplayer.py` | `NetworkController` : miroir de l'état serveur, clics, envoi de coups, resynchronisation. |
+| `net.py` | Façade minimale : `NetworkManager` + `NetworkController` en un seul import. |
 | `interface/screens/network_setup.py` | Écran Héberger / Rejoindre et salon de choix des camps. |
 
 ## Protocole
@@ -34,8 +35,9 @@ L'hôte démarre un serveur embarqué puis s'y connecte comme un client ordinair
   TCP, le nombre de joueurs et l'état (partie lancée ou non). Les serveurs complets ou déjà
   lancés sont ignorés. La requête est diffusée sur `255.255.255.255`, la boucle locale et
   le broadcast `/24` de chaque interface, pendant quatre secondes ; l'invité ouvre ensuite
-  sa connexion TCP habituelle. Un mode **Connexion directe (IP:port)** sert de repli quand
-  la diffusion est bloquée, et l'hôte affiche son adresse dans le salon.
+  sa connexion TCP habituelle. L'interface n'a plus de champ IP : **Rejoindre** déclenche
+  toujours cette découverte automatique. Le CLI expose `--mode multijoueur --role host|join`
+  pour démarrer directement dans le bon rôle, toujours sans adresse à saisir.
 - Taille maximale d'une ligne : 65 536 octets ; tampon incomplet maximal : 1 Mio.
 - Une ligne illisible est signalée (`malformed_message`) puis ignorée : le serveur ne
   ferme pas la connexion. Un flux qui dépasse le tampon maximal est coupé
@@ -120,10 +122,10 @@ Hôte                       Serveur                        Invité
 - Serveur : un thread d'acceptation + un thread de lecture par pair ; les écritures sont
   protégées par un verrou par pair.
 - Découverte : un thread UDP côté hôte répond aux recherches locales ; si le port `50506`
-  est occupé, l'hébergement continue avec un avertissement et la connexion directe reste
-  disponible. Le bouton Rejoindre effectue la recherche hors de la boucle graphique,
-  permet une nouvelle tentative et s'annule au retour au menu sans conserver une connexion
-  tardive. La connexion directe utilise le même mécanisme de thread.
+  est occupé, l'hébergement continue avec un avertissement et l'invité doit corriger le
+  pare-feu/le port. Le bouton Rejoindre effectue la recherche hors de la boucle graphique ;
+  si aucun hôte n'est trouvé, l'écran relance automatiquement la découverte toutes les 2 s
+  sans ressaisie, et s'annule au retour au menu sans conserver une connexion tardive.
 - Client : un thread de réception ; chaque message est déposé dans une `Queue`.
 - Pygame ne lit jamais une socket : `NetworkManager.poll()` vide la file à chaque frame.
 - Aucun calcul de règles n'a lieu dans un thread réseau côté client : seuls la
@@ -154,8 +156,9 @@ Hôte                       Serveur                        Invité
   partie complète sur deux demi-coups, coup hors tour, `stale_move`, troisième joueur
   refusé, entrée fragmentée/illisible, déconnexion signalée, revanche refusée en cours de
   partie ; découverte UDP de l'hôte (filtrage des parties pleines/lancées), hébergement
-  malgré un port de découverte occupé, analyse de l'adresse directe, connexion directe
-  depuis l'écran et annulation de recherche.
+  malgré un port de découverte occupé, démarrage automatique de l'écran réseau via CLI
+  (`--role host|join`), connexion sans saisie IP, relance automatique de la découverte et
+  annulation de recherche.
 
 `tests/test_modes.py` couvre le miroir client (`NetworkController`) : application d'un état
 serveur, envoi d'un coup police avec `ply`, rejet, resynchronisation sur trou de `ply`,
@@ -163,11 +166,10 @@ abandon.
 
 ## Test manuel sur deux machines
 
-1. Machine A : lancer l'application → **Multijoueur** → **Héberger** ; noter l'adresse
-   `IP:port` affichée dans le salon.
-2. Autoriser Python dans le pare-feu Windows (réseau privé) sur les deux machines.
-3. Machine B : **Multijoueur** → **Rejoindre** ; l'hôte est détecté automatiquement. En cas
-   d'échec, saisir l'adresse de l'hôte dans **Connexion directe (IP:port)**.
+1. Autoriser Python dans le pare-feu Windows (réseau privé) sur les deux machines.
+2. Machine A : `python main.py --mode multijoueur --role host` (ou **Multijoueur → Héberger**).
+3. Machine B : `python main.py --mode multijoueur --role join` (ou **Multijoueur → Rejoindre**) ;
+   l'hôte est détecté automatiquement, sans IP à saisir.
 4. Choisir un camp chacun (les camps identiques sont refusés) : la partie démarre.
 5. Pour un serveur autonome, utiliser des clients compatibles avec le protocole TCP ; la
    recherche automatique ne détecte que les hôtes lancés depuis l'application.
@@ -178,6 +180,6 @@ abandon.
   confiance. Ne pas exposer le port sur Internet.
 - Découverte : un port UDP unique pour toutes les instances ; avec plusieurs hôtes sur le
   même réseau, le premier serveur joignable répond (les parties pleines sont ignorées).
-  Utiliser la connexion directe pour viser un hôte précis.
+  Le CLI `--role host|join` réduit l'ambiguïté en fixant le rôle de chaque machine.
 - Une seule partie par serveur, deux joueurs, pas de reconnexion automatique en cours de
   partie (le joueur restant revient au menu pour réhéberger).

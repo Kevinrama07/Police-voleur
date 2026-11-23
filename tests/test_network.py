@@ -28,7 +28,7 @@ from multiplayer.protocol import (
 )
 from multiplayer.server import GameServer
 from multiplayer.session import GameSession, SessionError
-from interface.screens.network_setup import NetworkSetup, split_address
+from interface.screens.network_setup import NetworkSetup
 from interface.theme import Fonts
 
 GRAPH = build_default_graph()
@@ -486,20 +486,7 @@ def test_host_survives_discovery_failure(monkeypatch: pytest.MonkeyPatch) -> Non
         host.close()
 
 
-def test_split_address_validates_manual_endpoint() -> None:
-    assert split_address("192.168.1.20:50505") == ("192.168.1.20", 50505)
-    assert split_address(" localhost:6000 ") == ("localhost", 6000)
-    with pytest.raises(ValueError):
-        split_address("")
-    with pytest.raises(ValueError):
-        split_address("192.168.1.20")
-    with pytest.raises(ValueError):
-        split_address("192.168.1.20:abc")
-    with pytest.raises(ValueError):
-        split_address("192.168.1.20:70000")
-
-
-def test_network_setup_connects_with_a_direct_address() -> None:
+def test_network_setup_joins_with_discovery_only() -> None:
     host = NetworkManager()
     pygame.font.init()
     app = SimpleNamespace(
@@ -507,23 +494,68 @@ def test_network_setup_connects_with_a_direct_address() -> None:
         fonts=Fonts(),
         go_to=lambda _factory: None,
     )
-    screen = NetworkSetup(app)
+    host_address = host.host(seed=4)
+    screen = NetworkSetup(app, auto_role="join")
     try:
-        port = host.host(seed=4)[1]
-        screen.address_input.value = f"127.0.0.1:{port}"
-        screen._connect_direct()
         deadline = time.monotonic() + 3.0
         while screen.phase == "searching" and time.monotonic() < deadline:
             screen.update(0.02)
             time.sleep(0.01)
         assert screen.phase == "lobby", screen.error
         assert screen.network.connected
+        assert screen.network.join_address is not None
+        assert screen.network.join_address[1] == host_address[1]
+        assert not hasattr(screen, "address_input")
+        assert not hasattr(screen, "connect_button")
     finally:
         if screen.phase == "lobby":
             screen._leave_lobby()
         else:
             screen.network.close()
         host.close()
+
+
+def test_network_setup_can_autostart_host() -> None:
+    pygame.font.init()
+    app = SimpleNamespace(
+        settings=GameSettings(),
+        fonts=Fonts(),
+        go_to=lambda _factory: None,
+    )
+    screen = NetworkSetup(app, auto_role="host")
+    try:
+        assert screen.phase == "lobby"
+        assert screen.network.is_host
+        assert screen.network.connected
+    finally:
+        screen.network.close()
+
+
+def test_network_setup_retries_discovery_automatically(monkeypatch) -> None:
+    calls: list[int] = []
+
+    def no_host(self, *args, **kwargs):
+        calls.append(1)
+        return None
+
+    monkeypatch.setattr(NetworkManager, "join_discovered", no_host)
+    pygame.font.init()
+    app = SimpleNamespace(
+        settings=GameSettings(),
+        fonts=Fonts(),
+        go_to=lambda _factory: None,
+    )
+    screen = NetworkSetup(app, auto_role="join")
+    try:
+        deadline = time.monotonic() + 4.0
+        while len(calls) < 2 and time.monotonic() < deadline:
+            screen.update(0.05)
+            time.sleep(0.01)
+        assert len(calls) >= 2
+        assert screen.phase == "searching"
+        assert "automatique" in screen.notice.lower()
+    finally:
+        screen._back()
 
 
 def test_multiplayer_choice_screen_has_host_and_join_buttons() -> None:
@@ -540,7 +572,8 @@ def test_multiplayer_choice_screen_has_host_and_join_buttons() -> None:
             "Rejoindre",
         )
         assert not any(
-            hasattr(screen, name) for name in ("host_port", "join_ip", "join_port")
+            hasattr(screen, name)
+            for name in ("host_port", "join_ip", "join_port", "address_input", "connect_button")
         )
         assert not screen.host_button.rect.colliderect(screen.join_button.rect)
         screen.draw(pygame.Surface(WINDOW_SIZE))

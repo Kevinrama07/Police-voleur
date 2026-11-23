@@ -1,22 +1,16 @@
-"""Intelligence artificielle : Minimax + Alpha-Beta pour POLICE – VOLEUR."""
+"""Intelligence artificielle : un contrat, deux minimax alpha-bêta."""
 
-from ai.evaluation import evaluate
-from ai.minimax import (
-    SearchConfig,
-    SearchEngine,
-    SearchNode,
-    SearchResult,
-    choose_move,
-)
-from ai.police_minimax import PoliceMinimaxEngine, exact_evaluation
+from ai.contrat import Bot, Context, MoveScore, Result, SearchNode, Stats
+from ai.minimax_police import choose_move as police_bot
+from ai.minimax_voleur import choose_move as thief_bot
 
 __all__ = [
-    "PoliceMinimaxEngine",
-    "SearchConfig",
-    "SearchEngine",
+    "Bot",
+    "Context",
+    "MoveScore",
+    "Result",
     "SearchNode",
-    "SearchResult",
-    "choose_move",
-    "evaluate",
-    "exact_evaluation",
+    "Stats",
+    "police_bot",
+    "thief_bot",
 ]

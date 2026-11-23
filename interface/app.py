@@ -103,9 +103,10 @@ class App:
         pygame.display.toggle_fullscreen()
 
 
-def run_app(settings) -> None:
+def run_app(settings, initial_factory: Callable[[App], Scene] | None = None) -> None:
     from interface.screens.menu import MainMenu
 
     app = App(settings)
-    app.run(MainMenu(app))
+    initial = MainMenu(app) if initial_factory is None else initial_factory(app)
+    app.run(initial)
     sys.exit(0)
